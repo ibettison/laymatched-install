@@ -22,7 +22,11 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 detect_ubuntu_release() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
-        echo "${VERSION_ID}"
+        if [ "$ID" = "ubuntu" ]; then
+            echo "${VERSION_ID}"
+        else
+            log_error "This installer requires Ubuntu. Detected: $ID."
+        fi
     else
         log_error "Cannot detect Ubuntu release."
     fi
@@ -181,9 +185,16 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
         APP_VERSION="latest"
     fi
 
-    # Generate strong random passwords - NEVER reuse GHCR_TOKEN as DB or app credentials
+    # Generate PBKDF2-SHA256 password hash (same mechanism as private repo create_credentials.py)
+AUTH_PASSWORD_HASH=$(python3 -c "
+import hashlib, base64, secrets
+password = input('Enter admin password (or press Enter to generate random): ') or secrets.token_hex(16)
+iterations = 600000
+salt = secrets.token_bytes(18)
+digest = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, iterations)
+print(f'pbkdf2_sha256${iterations}${base64.urlsafe_b64encode(salt).decode().rstrip(\"=\")}${base64.urlsafe_b64encode(digest).decode().rstrip(\"=\")}')
+")
     POSTGRES_PASSWORD=$(generate_password 24)
-    AUTH_PASSWORD_HASH=$(generate_password 32)
     AUTH_SESSION_SECRET=$(generate_password 32)
     COMMUNITY_INSTALLATION_KEY=$(generate_password 32)
     COMMUNITY_ATTRIBUTION_SECRET=$(generate_password 32)
@@ -234,7 +245,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
-      - POSTGRES_DB=laymatched
+      - POSTGRES_DB=laymatched_betting
       - POSTGRES_USER=laymatched
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     ports:
@@ -256,9 +267,9 @@ services:
       db:
         condition: service_healthy
     volumes:
-      - bookmaker_icon_cache:/app/bookmaker_icon_cache
+      - bookmaker_icon_cache:/var/lib/laymatchedbetting/bookmaker-icons
     environment:
-      - DATABASE_URL=postgres://laymatched:${POSTGRES_PASSWORD}@db:5432/laymatched
+      - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-laymatched}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-laymatched_betting}
       - AUTH_USERNAME=laymatched
       - AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
       - AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
@@ -268,7 +279,7 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -288,7 +299,7 @@ services:
     ports:
       - "127.0.0.1:${APP_PORT:-8080}:80"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:${APP_PORT:-8080}/app/"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:${APP_PORT:-8080}/app/"]
       interval: 30s
       timeout: 10s
       retries: 3
