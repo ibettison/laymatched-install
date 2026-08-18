@@ -32,18 +32,13 @@ set -a
 source /opt/laymatched/.env
 set +a
 
-# -- Phase 1: Git pull (installer updates) -------------------------------
+# -- Phase 1: Installer update check -------------------------------------
 
-log_info "Phase 1: Pulling latest installer updates..."
+log_info "Phase 1: Checking for installer updates."
 
-cd /opt/laymatched 2>/dev/null || true
-if [ -d .git ]; then
-    if ! git pull > /dev/null 2>&1; then
-        log_warn "Failed to pull latest installer updates. Continuing with current installer version."
-    fi
-else
-    log_warn "No git repository found in /opt/laymatched. Skipping installer update check. Run 'git clone laymatched-install /opt/laymatched' to enable updates."
-fi
+# Git pull is handled during initial install; update.sh focuses on
+# pulling the latest LayMatched service images.
+log_info "Phase 1: Complete - skipping git pull (handled by install)."
 
 # -- Phase 2: Pull latest LayMatched images ------------------------------
 
@@ -86,7 +81,7 @@ fi
 
 # -- Phase 5: Status ----------------------------------------------------
 
-cat <<'UPDATE_EOF'
+cat <<UPDATE_EOF
 
 ================================================================================
 LAYMATCHED UPDATE COMPLETE
@@ -103,7 +98,7 @@ Logs and status:
   - Health status:   docker inspect --format='{{.State.Health.Status}}' laymatched-web
 
 Configuration preserved:
-  - /opt/laymatched/.env    - GHCR token, version, and generated secrets
+  - /opt/laymatched/.env    - generated secrets, version, and APP_VERSION
   - /opt/laymatched/data    - persistent application data (Docker volumes: postgres_data, bookmaker_icon_cache)
 
 ================================================================================

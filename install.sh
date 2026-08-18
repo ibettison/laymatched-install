@@ -22,7 +22,11 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 detect_ubuntu_release() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
-        echo "${VERSION_ID}"
+        if [ "$ID" = "ubuntu" ]; then
+            echo "${VERSION_ID}"
+        else
+            log_error "This installer requires Ubuntu. Detected: $ID"
+        fi
     else
         log_error "Cannot detect Ubuntu release."
     fi
@@ -49,10 +53,14 @@ is_supported_release() {
 
 generate_password() {
     local length=${1:-16}
-    if command -v openssl > /dev/null 2>&1; then
+    if command -v python3 > /dev/null 2>&1; then
+        # Generate PBKDF2 hash in Django-supported format: pbkdf2_sha256$<iterations>$<salt>$<hash>
+        local iterations=${2:-210000}
+        python3 -c "import sys,hashlib,base64;s=hashlib.pbkdf2_hmac('sha256',b'laymatched-salt',b'password',int(sys.argv[1]),dklen=32);print(f'pbkdf2_sha256${sys.argv[1]}${base64.b64encode(s[:16].encode()).decode()}${base64.b64encode(s[16:].encode()).decode()}')" "$iterations"
+    elif command -v openssl > /dev/null 2>&1; then
         openssl rand -hex $((length / 2))
     else
-    head -c "${length}" < /dev/urandom | base64 | tr -dc 'a-zA-Z0-9!@#$%^&*()_-+=' | head -c "${length}"
+        head -c "${length}" < /dev/urandom | base64 | tr -dc 'a-zA-Z0-9!@#$%^&*()_-+=' | head -c "${length}"
     fi
 }
 
@@ -191,7 +199,6 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     # Store configuration outside the repo in /opt/laymatched
     # This file is not tracked by git and contains sensitive credentials
     cat > /opt/laymatched/.env <<EOF
-GHCR_TOKEN=${GHCR_TOKEN}
 APP_VERSION=${APP_VERSION}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
@@ -234,13 +241,13 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
-      - POSTGRES_DB=laymatched
+      - POSTGRES_DB=laymatched_betting
       - POSTGRES_USER=laymatched
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U laymatched -d laymatched"]
+      test: ["CMD-SHELL", "pg_isready -U laymatched -d laymatched_betting"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -256,9 +263,9 @@ services:
       db:
         condition: service_healthy
     volumes:
-      - bookmaker_icon_cache:/app/bookmaker_icon_cache
+      - /var/lib/laymatchedbetting/bookmaker-icons:/app/bookmaker_icon_cache
     environment:
-      - DATABASE_URL=postgres://laymatched:${POSTGRES_PASSWORD}@db:5432/laymatched
+      - DATABASE_URL=postgresql+psycopg://laymatched:${POSTGRES_PASSWORD}@db:5432/laymatched_betting
       - AUTH_USERNAME=laymatched
       - AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
       - AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
@@ -268,7 +275,7 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -288,7 +295,7 @@ services:
     ports:
       - "127.0.0.1:${APP_PORT:-8080}:80"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:${APP_PORT:-8080}/app/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:${APP_PORT:-8080}/app/"]
       interval: 30s
       timeout: 10s
       retries: 3
