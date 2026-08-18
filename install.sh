@@ -39,13 +39,17 @@ is_supported_release() {
     release=$(detect_ubuntu_release)
     case "$release" in
         20.04|22.04|24.04) return 0 ;;
-        *) return 1 ;;
+        *)
+            log_error "Ubuntu $release is not a supported release. Supported: 20.04, 22.04, 24.04. Non-Ubuntu systems are explicitly rejected."
+            return 1 ;;
     esac
 }
 
 # -- Phase 1: Prerequisites & Ubuntu validation ----------------------------
 
 log_info "Phase 1: Validating Ubuntu server..."
+
+check_root
 
 if ! [ -x "$(command -v lsb_release)" ] && ! [ -f /etc/os-release ]; then
     log_error "This installer requires a supported Ubuntu server."
@@ -58,7 +62,7 @@ fi
 
 log_info "Phase 1b: Checking system resources..."
 
-# Skip resource checks on rerun
+# Skip resource checks on rerun - idempotent installer
 INSTALL_FIRST_RUN=true
 if [ -f /opt/laymatched/.env ]; then
     INSTALL_FIRST_RUN=false
@@ -67,20 +71,20 @@ fi
 
 if [ "$INSTALL_FIRST_RUN" = "true" ]; then
 
-# Check available memory (MB)
+# Check available memory (MB) - minimum 2GB for multi-service
 TOTAL_MEM_MB=$(free -m 2>/dev/null | awk '/Mem:/ {print $2}')
 if [ -z "$TOTAL_MEM_MB" ] || [ "$TOTAL_MEM_MB" -lt 2048 ]; then
-    log_warn "Available memory is less than 2GB (found: ${TOTAL_MEM_MB:-0}MB). LayMatched may not function correctly."
+    log_warn "Available memory is less than 2GB (found: ${TOTAL_MEM_MB:-0}MB). LayMatched multi-service may not function correctly."
 fi
 
-# Check available disk space (GB) - /opt/laymatched needs at least 2GB
+# Check available disk space (GB) - minimum 2GB for /opt/laymatched
 AVAILABLE_DISK_GB=$(df -BG /opt 2>/dev/null | awk 'NR==2 {print $4}' | tr -GdG)
 AVAILABLE_DISK_GB=${AVAILABLE_DISK_GB:-0}
 if [ "$AVAILABLE_DISK_GB" -lt 2 ]; then
     log_error "Insufficient disk space for LayMatched installation. At least 2GB required (available: ${AVAILABLE_DISK_GB}GB)."
 fi
 
-# Check CPU count
+# Check CPU count - minimum 2 cores for multi-service
 CPU_COUNT=$(nproc 2>/dev/null || echo 1)
 if [ "$CPU_COUNT" -lt 2 ]; then
     log_warn "Available CPU cores is less than 2 (found: $CPU_COUNT). Performance may be impacted."
@@ -91,6 +95,8 @@ log_info "Detected Ubuntu $UBUNTU_RELEASE - proceeding with installation."
 else
 log_info "Detected Ubuntu $UBUNTU_RELEASE - proceeding with installation."
 fi
+
+# -- Safe rerun: skip Docker install if already present --------------------
 
 DOCKER_ALREADY_INSTALLED=false
 if command -v docker > /dev/null 2>&1; then
@@ -142,7 +148,7 @@ CONFIG_ALREADY_PROVIDED=false
 if [ -f /opt/laymatched/.env ]; then
     log_info "Configuration already present in /opt/laymatched/.env - skipping interactive prompts."
     CONFIG_ALREADY_PROVIDED=true
-    # Load the existing config
+    # Load the existing config - never export secrets to environment
     set -a
     source /opt/laymatched/.env
     set +a
@@ -182,8 +188,9 @@ fi
 
 log_info "Phase 5: Authenticating to GitHub Container Registry..."
 
+# Authentication failure must stop installation - do not hide with || true
 if ! echo "${GHCR_TOKEN}" | docker login ghcr.io -u ibettison --password-stdin > /dev/null 2>&1; then
-    log_error "Failed to authenticate to GitHub Container Registry. Please verify your GHCR token is valid."
+    log_error "Failed to authenticate to GitHub Container Registry. Please verify your GHCR token is valid. This is a hard requirement for pulling private release images."
 fi
 
 log_info "Authentication to GHCR complete."
@@ -193,23 +200,86 @@ log_info "Authentication to GHCR complete."
 log_info "Phase 6: Generating docker-compose.yml..."
 
 cat > /opt/laymatched/docker-compose.yml <<'COMPOSE_EOF'
+version: '3.8'
+
 services:
-  laymatched:
-    image: ghcr.io/ibettison/laymatched:${APP_VERSION}
-    container_name: laymatched
+  db:
+    image: postgres:17-alpine
+    container_name: laymatched-db
     restart: unless-stopped
     volumes:
-      - laymatched_data:/var/lib/laymatched
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=laymatched
+      - POSTGRES_USER=laymatched
+      - POSTGRES_PASSWORD=${GHCR_TOKEN}
+    ports:
+      - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "pg_isready -U laymatched -d laymatched"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - laymatched_net
+
+  api:
+    image: ghcr.io/ibettison/laymatched-api:${APP_VERSION}
+    container_name: laymatched-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - bookmaker_icon_cache:/app/bookmaker_icon_cache
+    environment:
+      - DATABASE_URL=postgres://laymatched:${GHCR_TOKEN}@db:5432/laymatched
+      - AUTH_USERNAME=laymatched
+      - AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH:-changeme}
+      - AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET:-changeme}
+      - AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
+      - COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY:-changeme}
+      - COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET:-changeme}
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+    networks:
+      - laymatched_net
+
+  web:
+    image: ghcr.io/ibettison/laymatched-web:${APP_VERSION}
+    container_name: laymatched-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      - API_URL=http://api:8000
+      - GHCR_TOKEN=${GHCR_TOKEN}
     ports:
       - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/app/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - laymatched_net
+
 volumes:
-  laymatched_data:
+  postgres_data:
+  bookmaker_icon_cache:
+
+networks:
+  laymatched_net:
+    driver: bridge
 COMPOSE_EOF
 
 log_info "docker-compose.yml generated."
@@ -231,9 +301,10 @@ MAX_WAIT=120
 ELAPSED=0
 HEALTHY=false
 
+# Health check the web frontend on loopback - the public-facing endpoint
 while [ $ELAPSED -lt $MAX_WAIT ]; do
-    if docker inspect -f '{{.HealthStatus}}' laymatched 2>/dev/null | grep -q "healthy"; then
-        log_info "LayMatched is healthy."
+    if docker inspect -f '{{.HealthStatus}}' laymatched-web 2>/dev/null | grep -q "healthy"; then
+        log_info "LayMatched Web is healthy."
         HEALTHY=true
         break
     fi
@@ -247,7 +318,7 @@ done
 if [ "$HEALTHY" = "true" ]; then
     log_info "Health checks passed."
 else
-    log_error "Health check timeout reached after $MAX_WAIT seconds. LayMatched is not responding. Check container logs with: docker logs -f laymatched"
+    log_error "Health check timeout reached after $MAX_WAIT seconds. LayMatched Web is not responding. Check container logs with: docker logs -f laymatched-web"
 fi
 
 # -- Phase 9: Status/instructions ----------------------------------------
@@ -261,22 +332,27 @@ LAYMATCHED INSTALLATION COMPLETE
 Installation summary:
   - Server:        Ubuntu $UBUNTU_RELEASE
   - Docker:        Installed
-  - LayMatched:    Running via Docker Compose
+  - LayMatched:    Running via Docker Compose (multi-service: db, api, web)
   - Version:       ${APP_VERSION}
   - Data directory: /opt/laymatched
-  - Container:     laymatched (restart: unless-stopped)
 
-Ports configured:
-  - HTTP (8080)    Bound to 127.0.0.1 only (private)
+Ports configured (all private/loopback only):
+  - HTTP (8080)    Bound to 127.0.0.1 only - Web frontend
+  - API (8000)     Bound to 127.0.0.1 only - API service
+  - PostgreSQL (5432) Bound to 127.0.0.1 only - Database
+
+Volumes (persistent data):
+  - postgres_data    - PostgreSQL data directory
+  - bookmaker_icon_cache - API icon cache
 
 Configuration:
   - /opt/laymatched/.env   - GHCR token and version (permissions 600)
   - /opt/laymatched/config - customer configuration (add as needed)
 
 Logs and status:
-  - View logs:       docker logs -f laymatched
+  - View logs:       docker logs -f laymatched-web
   - Container status: docker ps
-  - Health status:   docker inspect --format='{{.HealthStatus}' laymatched
+  - Health status:   docker inspect --format='{{.HealthStatus}' laymatched-web
 
 Update instructions:
   - cd /opt/laymatched
@@ -284,6 +360,5 @@ Update instructions:
   - sudo ./update.sh
 
 ================================================================================
-INSTALL_EOF
 
 log_info "LayMatched installer finished successfully."

@@ -42,28 +42,28 @@ if [ -d .git ]; then
         log_warn "Failed to pull latest installer updates. Continuing with current installer version."
     fi
 else
-    log_warn "No git repository found in /opt/laymatched. Skipping installer update check."
+    log_warn "No git repository found in /opt/laymatched. Skipping installer update check. Run 'git clone laymatched-install /opt/laymatched' to enable updates."
 fi
 
-# -- Phase 2: Pull latest LayMatched image -------------------------------
+# -- Phase 2: Pull latest LayMatched images ------------------------------
 
 log_info "Phase 2: Pulling latest LayMatched release (${APP_VERSION})..."
 
 docker compose -f /opt/laymatched/docker-compose.yml pull
 
-# -- Phase 3: Restart services ------------------------------------------
+# -- Phase 3: Restart services -------------------------------------------
 
 log_info "Phase 3: Restarting services..."
 
 docker compose -f /opt/laymatched/docker-compose.yml up -d
 
-# -- Phase 4: Health checks ---------------------------------------------
+# -- Phase 4: Health checks ----------------------------------------------
 
 log_info "Phase 4: Running health checks..."
 
 MAX_WAIT=120
 ELAPSED=0
-APP_NAME="laymatched"
+APP_NAME="laymatched-web"
 
 while [ $ELAPSED -lt $MAX_WAIT ]; do
     if docker inspect -f '{{.HealthStatus}}' "${APP_NAME}" 2>/dev/null | grep -q "healthy"; then
@@ -77,13 +77,15 @@ while [ $ELAPSED -lt $MAX_WAIT ]; do
     fi
 done
 
+# -- Phase 5: Status - fail clearly if unhealthy -------------------------
+
 if [ $ELAPSED -ge $MAX_WAIT ]; then
-    log_warn "Health check timeout reached, but services may still be starting."
+    log_error "Health check timeout reached after $MAX_WAIT seconds. ${APP_NAME} is not responding. Update failed. Check container logs with: docker logs -f ${APP_NAME}"
 fi
 
 # -- Phase 5: Status ----------------------------------------------------
 
-cat <<UPDATE_EOF
+cat <<'UPDATE_EOF'
 
 ================================================================================
 LAYMATCHED UPDATE COMPLETE
@@ -95,13 +97,13 @@ Updated to version: ${APP_VERSION}
   - Restarted services: docker compose -f /opt/laymatched/docker-compose.yml up -d
 
 Logs and status:
-  - View logs:       docker logs -f laymatched
+  - View logs:       docker logs -f laymatched-web
   - Container status: docker ps
-  - Health status:   docker inspect --format='{{.HealthStatus}' laymatched
+  - Health status:   docker inspect --format='{{.HealthStatus}' laymatched-web
 
 Configuration preserved:
   - /opt/laymatched/.env    - GHCR token and version
-  - /opt/laymatched/data    - persistent application data (Docker volume)
+  - /opt/laymatched/data    - persistent application data (Docker volumes: postgres_data, bookmaker_icon_cache)
 
 ================================================================================
 UPDATE_EOF
