@@ -8,10 +8,6 @@ on:
         required: true
         default: 'v0.1.0-test'
 
-permissions:
-  contents: read
-  packages: write
-
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
