@@ -45,6 +45,17 @@ is_supported_release() {
     esac
 }
 
+# -- Generate strong random password ------------------------------------------
+
+generate_password() {
+    local length=${1:-16}
+    if command -v openssl > /dev/null 2>&1; then
+        openssl rand -hex $((length / 2))
+    else
+    head -c "${length}" < /dev/urandom | base64 | tr -dc 'a-zA-Z0-9!@#$%^&*()_-+=' | head -c "${length}"
+    fi
+}
+
 # -- Phase 1: Prerequisites & Ubuntu validation ----------------------------
 
 log_info "Phase 1: Validating Ubuntu server..."
@@ -170,16 +181,29 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
         APP_VERSION="latest"
     fi
 
+    # Generate strong random passwords - NEVER reuse GHCR_TOKEN as DB or app credentials
+    POSTGRES_PASSWORD=$(generate_password 24)
+    AUTH_PASSWORD_HASH=$(generate_password 32)
+    AUTH_SESSION_SECRET=$(generate_password 32)
+    COMMUNITY_INSTALLATION_KEY=$(generate_password 32)
+    COMMUNITY_ATTRIBUTION_SECRET=$(generate_password 32)
+
     # Store configuration outside the repo in /opt/laymatched
     # This file is not tracked by git and contains sensitive credentials
     cat > /opt/laymatched/.env <<EOF
 GHCR_TOKEN=${GHCR_TOKEN}
 APP_VERSION=${APP_VERSION}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
+AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
+AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
+COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY}
+COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET}
 EOF
     chmod 600 /opt/laymatched/.env
     chown root:root /opt/laymatched/.env
 
-    log_info "Configuration stored in /opt/laymatched/.env (permissions 600)."
+    log_info "Configuration stored in /opt/laymatched/.env (permissions 600). Secrets generated independently of GHCR token."
 else
     log_info "Using existing configuration from /opt/laymatched/.env."
 fi
@@ -212,7 +236,7 @@ services:
     environment:
       - POSTGRES_DB=laymatched
       - POSTGRES_USER=laymatched
-      - POSTGRES_PASSWORD=${GHCR_TOKEN}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
@@ -234,13 +258,13 @@ services:
     volumes:
       - bookmaker_icon_cache:/app/bookmaker_icon_cache
     environment:
-      - DATABASE_URL=postgres://laymatched:${GHCR_TOKEN}@db:5432/laymatched
+      - DATABASE_URL=postgres://laymatched:${POSTGRES_PASSWORD}@db:5432/laymatched
       - AUTH_USERNAME=laymatched
-      - AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH:-changeme}
-      - AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET:-changeme}
+      - AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
+      - AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
       - AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
-      - COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY:-changeme}
-      - COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET:-changeme}
+      - COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY}
+      - COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET}
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
@@ -262,9 +286,9 @@ services:
     environment:
       - API_URL=http://api:8000
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${APP_PORT:-8080}:80"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/app/"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:${APP_PORT:-8080}/app/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -301,8 +325,10 @@ ELAPSED=0
 HEALTHY=false
 
 # Health check the web frontend on loopback - the public-facing endpoint
+# Use .State.Health.Status for robust health status inspection
 while [ $ELAPSED -lt $MAX_WAIT ]; do
-    if docker inspect -f '{{.HealthStatus}}' laymatched-web 2>/dev/null | grep -q "healthy"; then
+    STATUS=$(docker inspect -f '{{.State.Health.Status}}' laymatched-web 2>/dev/null)
+    if [ "$STATUS" = "healthy" ]; then
         log_info "LayMatched Web is healthy."
         HEALTHY=true
         break
@@ -336,22 +362,22 @@ Installation summary:
   - Data directory: /opt/laymatched
 
 Ports configured (all private/loopback only):
-  - HTTP (8080)    Bound to 127.0.0.1 only - Web frontend
-  - API (8000)     Bound to 127.0.0.1 only - API service
-  - PostgreSQL (5432) Bound to 127.0.0.1 only - Database
+  - HTTP (8080)    Bound to 127.0.0.1 only - Web frontend (127.0.0.1:${APP_PORT:-8080}:80)
+  - API (8000)     Bound to 127.0.0.1 only - API service (127.0.0.1:8000:8000)
+  - PostgreSQL (5432) Bound to 127.0.0.1 only - Database (127.0.0.1:5432:5432)
 
 Volumes (persistent data):
   - postgres_data    - PostgreSQL data directory
   - bookmaker_icon_cache - API icon cache
 
 Configuration:
-  - /opt/laymatched/.env   - GHCR token and version (permissions 600)
+  - /opt/laymatched/.env   - GHCR token, version, and generated secrets (permissions 600)
   - /opt/laymatched/config - customer configuration (add as needed)
 
 Logs and status:
   - View logs:       docker logs -f laymatched-web
   - Container status: docker ps
-  - Health status:   docker inspect --format='{{.HealthStatus}' laymatched-web
+  - Health status:   docker inspect --format='{{.State.Health.Status}}' laymatched-web
 
 Update instructions:
   - cd /opt/laymatched

@@ -66,7 +66,8 @@ ELAPSED=0
 APP_NAME="laymatched-web"
 
 while [ $ELAPSED -lt $MAX_WAIT ]; do
-    if docker inspect -f '{{.HealthStatus}}' "${APP_NAME}" 2>/dev/null | grep -q "healthy"; then
+    STATUS=$(docker inspect -f '{{.State.Health.Status}}' "${APP_NAME}" 2>/dev/null)
+    if [ "$STATUS" = "healthy" ]; then
         log_info "${APP_NAME} is healthy."
         break
     fi
@@ -99,10 +100,10 @@ Updated to version: ${APP_VERSION}
 Logs and status:
   - View logs:       docker logs -f laymatched-web
   - Container status: docker ps
-  - Health status:   docker inspect --format='{{.HealthStatus}' laymatched-web
+  - Health status:   docker inspect --format='{{.State.Health.Status}}' laymatched-web
 
 Configuration preserved:
-  - /opt/laymatched/.env    - GHCR token and version
+  - /opt/laymatched/.env    - GHCR token, version, and generated secrets
   - /opt/laymatched/data    - persistent application data (Docker volumes: postgres_data, bookmaker_icon_cache)
 
 ================================================================================
