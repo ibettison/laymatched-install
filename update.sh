@@ -99,7 +99,11 @@ Logs and status:
 
 Configuration preserved:
   - /opt/laymatched/.env    - generated secrets, version, and APP_VERSION
+<<<<<<< HEAD
   - /opt/laymatched/data    - persistent application data (Docker volumes: postgres_data, bookmaker_icon_cache)
+=======
+  - /opt/laymatched/data    - persistent application data (Docker volume)
+>>>>>>> 1e200f1 (fix: apply review blockers - Ubuntu ID check, PBKDF2 hash, remove GHCR_TOKEN persistence, update.sh heredoc and git-pull)
 
 ================================================================================
 UPDATE_EOF
