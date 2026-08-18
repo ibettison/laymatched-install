@@ -22,9 +22,15 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 detect_ubuntu_release() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
-        echo "$ID$VERSION_ID"
+        echo "${VERSION_ID}"
     else
         log_error "Cannot detect Ubuntu release."
+    fi
+}
+
+check_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        log_error "This installer must be run as root or with sudo privileges."
     fi
 }
 
@@ -50,9 +56,41 @@ if ! is_supported_release; then
     log_error "Ubuntu $UBUNTU_RELEASE is not a supported release. Supported: 20.04, 22.04, 24.04"
 fi
 
+log_info "Phase 1b: Checking system resources..."
+
+# Skip resource checks on rerun
+INSTALL_FIRST_RUN=true
+if [ -f /opt/laymatched/.env ]; then
+    INSTALL_FIRST_RUN=false
+    log_info "Existing installation detected - skipping resource checks."
+fi
+
+if [ "$INSTALL_FIRST_RUN" = "true" ]; then
+
+# Check available memory (MB)
+TOTAL_MEM_MB=$(free -m 2>/dev/null | awk '/Mem:/ {print $2}')
+if [ -z "$TOTAL_MEM_MB" ] || [ "$TOTAL_MEM_MB" -lt 2048 ]; then
+    log_warn "Available memory is less than 2GB (found: ${TOTAL_MEM_MB:-0}MB). LayMatched may not function correctly."
+fi
+
+# Check available disk space (GB) - /opt/laymatched needs at least 2GB
+AVAILABLE_DISK_GB=$(df -BG /opt 2>/dev/null | awk 'NR==2 {print $4}' | tr -GdG)
+AVAILABLE_DISK_GB=${AVAILABLE_DISK_GB:-0}
+if [ "$AVAILABLE_DISK_GB" -lt 2 ]; then
+    log_error "Insufficient disk space for LayMatched installation. At least 2GB required (available: ${AVAILABLE_DISK_GB}GB)."
+fi
+
+# Check CPU count
+CPU_COUNT=$(nproc 2>/dev/null || echo 1)
+if [ "$CPU_COUNT" -lt 2 ]; then
+    log_warn "Available CPU cores is less than 2 (found: $CPU_COUNT). Performance may be impacted."
+fi
+
 log_info "Detected Ubuntu $UBUNTU_RELEASE - proceeding with installation."
 
-# -- Safe rerun: skip Docker install if already present --------------------
+else
+log_info "Detected Ubuntu $UBUNTU_RELEASE - proceeding with installation."
+fi
 
 DOCKER_ALREADY_INSTALLED=false
 if command -v docker > /dev/null 2>&1; then
@@ -144,7 +182,9 @@ fi
 
 log_info "Phase 5: Authenticating to GitHub Container Registry..."
 
-echo "${GHCR_TOKEN}" | docker login ghcr.io -u ibettison --password-stdin > /dev/null 2>&1 || true
+if ! echo "${GHCR_TOKEN}" | docker login ghcr.io -u ibettison --password-stdin > /dev/null 2>&1; then
+    log_error "Failed to authenticate to GitHub Container Registry. Please verify your GHCR token is valid."
+fi
 
 log_info "Authentication to GHCR complete."
 
@@ -160,16 +200,14 @@ services:
     restart: unless-stopped
     volumes:
       - laymatched_data:/var/lib/laymatched
-    environment:
-      - GHCR_TOKEN=${GHCR_TOKEN}
-    ports:
-      - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+    ports:
+      - "127.0.0.1:8080:8080"
 volumes:
   laymatched_data:
 COMPOSE_EOF
@@ -191,10 +229,12 @@ log_info "Phase 8: Running health checks..."
 
 MAX_WAIT=120
 ELAPSED=0
+HEALTHY=false
 
 while [ $ELAPSED -lt $MAX_WAIT ]; do
-    if docker inspect -f '{{.HealthStatus}' laymatched | grep -q "healthy"; then
+    if docker inspect -f '{{.HealthStatus}}' laymatched 2>/dev/null | grep -q "healthy"; then
         log_info "LayMatched is healthy."
+        HEALTHY=true
         break
     fi
     sleep 5
@@ -204,13 +244,15 @@ while [ $ELAPSED -lt $MAX_WAIT ]; do
     fi
 done
 
-if [ $ELAPSED -ge $MAX_WAIT ]; then
-    log_warn "Health check timeout reached, but services may still be starting."
+if [ "$HEALTHY" = "true" ]; then
+    log_info "Health checks passed."
+else
+    log_error "Health check timeout reached after $MAX_WAIT seconds. LayMatched is not responding. Check container logs with: docker logs -f laymatched"
 fi
 
 # -- Phase 9: Status/instructions ----------------------------------------
 
-cat <<'INSTALL_EOF'
+cat <<INSTALL_EOF
 
 ================================================================================
 LAYMATCHED INSTALLATION COMPLETE

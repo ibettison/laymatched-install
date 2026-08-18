@@ -36,8 +36,14 @@ set +a
 
 log_info "Phase 1: Pulling latest installer updates..."
 
-cd /opt/laymatched
-git pull
+cd /opt/laymatched 2>/dev/null || true
+if [ -d .git ]; then
+    if ! git pull > /dev/null 2>&1; then
+        log_warn "Failed to pull latest installer updates. Continuing with current installer version."
+    fi
+else
+    log_warn "No git repository found in /opt/laymatched. Skipping installer update check."
+fi
 
 # -- Phase 2: Pull latest LayMatched image -------------------------------
 
@@ -60,7 +66,7 @@ ELAPSED=0
 APP_NAME="laymatched"
 
 while [ $ELAPSED -lt $MAX_WAIT ]; do
-    if docker inspect -f '{{.HealthStatus}' "${APP_NAME}" | grep -q "healthy"; then
+    if docker inspect -f '{{.HealthStatus}}' "${APP_NAME}" 2>/dev/null | grep -q "healthy"; then
         log_info "${APP_NAME} is healthy."
         break
     fi
@@ -77,7 +83,7 @@ fi
 
 # -- Phase 5: Status ----------------------------------------------------
 
-cat <<'UPDATE_EOF'
+cat <<UPDATE_EOF
 
 ================================================================================
 LAYMATCHED UPDATE COMPLETE
