@@ -387,3 +387,4 @@ Update instructions:
 ================================================================================
 
 log_info "LayMatched installer finished successfully."
+INSTALL_EOF
