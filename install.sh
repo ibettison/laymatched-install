@@ -378,7 +378,7 @@ Volumes (persistent data):
   - bookmaker_icon_cache - API icon cache
 
 Configuration:
-  - /opt/laymatched/.env   - GHCR token, version, and generated secrets (permissions 600)
+  - /opt/laymatched/.env   - generated secrets, version, and APP_VERSION (permissions 600)
   - /opt/laymatched/config - customer configuration (add as needed)
 
 Logs and status:
