@@ -261,7 +261,6 @@ services:
         condition: service_healthy
     environment:
       - API_URL=http://api:8000
-      - GHCR_TOKEN=${GHCR_TOKEN}
     ports:
       - "127.0.0.1:8080:8080"
     healthcheck:
