@@ -156,7 +156,7 @@ fi
 log_info "Phase 3: Creating /opt/laymatched..."
 
 mkdir -p /opt/laymatched
-chmod 755 /opt/laymatched
+chmod 750 /opt/laymatched
 chown root:root /opt/laymatched
 
 log_info "/opt/laymatched created."
@@ -177,8 +177,11 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     log_info "Phase 4: Collecting customer configuration..."
 
     # Prompt for GHCR authentication token (never stored in repo)
+    # Prevent token from appearing in shell history
+    set +o history
     read -r -p "Enter your GitHub Container Registry (GHCR) authentication token: " -s GHCR_TOKEN
     echo
+    set -o history
     if [ -z "$GHCR_TOKEN" ]; then
         log_error "GHCR token is required."
     fi
@@ -200,6 +203,7 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     # This file is not tracked by git and contains sensitive credentials
     cat > /opt/laymatched/.env <<EOF
 APP_VERSION=${APP_VERSION}
+GHCR_TOKEN=${GHCR_TOKEN}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
 AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
@@ -244,8 +248,6 @@ services:
       - POSTGRES_DB=laymatched_betting
       - POSTGRES_USER=laymatched
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-    ports:
-      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U laymatched -d laymatched_betting"]
       interval: 30s
@@ -272,8 +274,6 @@ services:
       - AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
       - COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY}
       - COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET}
-    ports:
-      - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
       interval: 30s
@@ -388,7 +388,6 @@ Logs and status:
 
 Update instructions:
   - cd /opt/laymatched
-  - git pull
   - sudo ./update.sh
 
 ================================================================================

@@ -32,13 +32,29 @@ set -a
 source /opt/laymatched/.env
 set +a
 
-# -- Phase 1: Installer update check -------------------------------------
+# -- GHCR Authentication -------------------------------------------------
 
-log_info "Phase 1: Checking for installer updates."
+log_info "Authenticating to GitHub Container Registry..."
 
-# Git pull is handled during initial install; update.sh focuses on
-# pulling the latest LayMatched service images.
-log_info "Phase 1: Complete - skipping git pull (handled by install)."
+if [ -z "${GHCR_TOKEN:-}" ]; then
+    log_warn "GHCR_TOKEN not found in .env. Prompting for token..."
+    set +o history
+    read -r -p "Enter your GitHub Container Registry (GHCR) authentication token: " -s GHCR_TOKEN
+    echo
+    set -o history
+    if [ -z "$GHCR_TOKEN" ]; then
+        log_error "GHCR token is required to pull private images."
+    fi
+    # Update .env with the new token
+    sed -i "s/^GHCR_TOKEN=.*/GHCR_TOKEN=${GHCR_TOKEN}/" /opt/laymatched/.env
+fi
+
+# Authenticate to GHCR (failure stops update - do not hide with || true)
+if ! echo "${GHCR_TOKEN}" | docker login ghcr.io -u ibettison --password-stdin > /dev/null 2>&1; then
+    log_error "Failed to authenticate to GitHub Container Registry. Please verify your GHCR token is valid."
+fi
+
+log_info "Authentication to GHCR complete."
 
 # -- Phase 2: Pull latest LayMatched images ------------------------------
 
