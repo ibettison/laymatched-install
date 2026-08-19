@@ -62,6 +62,36 @@ generate_secret() {
     fi
 }
 
+# -- Auth API: Exchange Installer Token for registry credentials -------------
+# Calls LayMatched Auth API to get short-lived registry token and approved version.
+# Sets: REGISTRY_TOKEN, APPROVED_VERSION, REGISTRY_URL
+
+AUTH_API_URL="https://api.laymatched.com/installer/authorize"
+
+call_auth_api() {
+    local installer_token="$1"
+    log_info "Contacting LayMatched authorization service..."
+
+    local response
+    if ! response=$(curl -fsS -X POST \
+        -H "Content-Type: application/json" \
+        -d "{\"installer_token\": \"${installer_token}\"}" \
+        "${AUTH_API_URL}" 2>/dev/null); then
+        log_error "Failed to contact LayMatched authorization service. Check network connectivity and try again."
+    fi
+
+    # Parse JSON response using python3 (available on target Ubuntu)
+    REGISTRY_TOKEN=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_token', ''))")
+    APPROVED_VERSION=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('approved_version', ''))")
+    REGISTRY_URL=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_url', ''))")
+
+    if [ -z "${REGISTRY_TOKEN}" ] || [ -z "${APPROVED_VERSION}" ] || [ -z "${REGISTRY_URL}" ]; then
+        log_error "Invalid response from authorization service. Token may be invalid or expired."
+    fi
+
+    log_info "Authorization successful. Approved version: ${APPROVED_VERSION}"
+}
+
 # -- Generate PBKDF2 password hash matching backend/scripts/create_credentials.py ---
 # Takes password as argument, outputs: pbkdf2_sha256$$600000$$<urlsafe_b64_salt>$$<urlsafe_b64_digest>
 # NOTE: Outputs DOUBLE dollar ($$) for Docker Compose .env interpolation.
@@ -221,15 +251,19 @@ fi
 if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     log_info "Phase 4: Collecting customer configuration..."
 
-    # Prompt for GHCR authentication token (never stored in .env, never in repo)
+    # Prompt for LayMatched Installer Token (never stored in .env, never in repo)
     # Prevent token from appearing in shell history
     set +o history
-    read -r -p "Enter your GitHub Container Registry (GHCR) authentication token: " -s GHCR_TOKEN
+    read -r -p "Enter your LayMatched Installer Token: " -s INSTALLER_TOKEN
     echo
     set -o history
-    if [ -z "$GHCR_TOKEN" ]; then
-        log_error "GHCR token is required."
+    if [ -z "$INSTALLER_TOKEN" ]; then
+        log_error "LayMatched Installer Token is required."
     fi
+
+    # Call Auth API to get registry credentials and approved version
+    call_auth_api "$INSTALLER_TOKEN"
+    APP_VERSION="${APPROVED_VERSION}"
 
     # Prompt for LayMatched login credentials (matches backend/scripts/create_credentials.py)
     # Collect Login ID in outer scope
@@ -267,13 +301,7 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     # Generate hash using pure helper
     AUTH_PASSWORD_HASH=$(generate_password_hash "$password")
 
-    # Prompt for application version/tag
-    read -r -p "Enter the LayMatched release version/tag (e.g., latest, v1.2.3): " APP_VERSION
-    if [ -z "$APP_VERSION" ]; then
-        APP_VERSION="latest"
-    fi
-
-    # Generate strong random secrets - NEVER reuse GHCR_TOKEN as DB or app credentials
+    # Generate strong random secrets - NEVER reuse installer token as DB or app credentials
     POSTGRES_PASSWORD=$(generate_secret 24)
     AUTH_SESSION_SECRET=$(generate_secret 32)
     COMMUNITY_INSTALLATION_KEY=$(generate_secret 32)
@@ -281,7 +309,7 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
 
     # Store configuration outside the repo in /opt/laymatched
     # This file is not tracked by git and contains sensitive credentials
-    # GHCR_TOKEN is NOT persisted - only used for initial docker login
+    # Installer Token and Registry Token are NOT persisted - only used for initial auth/pull
     cat > /opt/laymatched/.env <<EOF
 APP_VERSION=${APP_VERSION}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -295,36 +323,40 @@ EOF
     chmod 600 /opt/laymatched/.env
     chown root:root /opt/laymatched/.env
 
-    log_info "Configuration stored in /opt/laymatched/.env (permissions 600). Secrets generated independently of GHCR token."
+    log_info "Configuration stored in /opt/laymatched/.env (permissions 600). Secrets generated independently of installer token."
 else
-    # On rerun: GHCR_TOKEN not in .env, must prompt for docker login
-    log_info "Existing installation detected - GHCR token required for image pull."
+    # On rerun: Load existing APP_VERSION and re-authenticate via Auth API
+    log_info "Existing installation detected - re-authorizing for image pull."
+    APP_VERSION=$(grep '^APP_VERSION=' /opt/laymatched/.env | cut -d'=' -f2-)
     set +o history
-    read -r -p "Enter your GitHub Container Registry (GHCR) authentication token: " -s GHCR_TOKEN
+    read -r -p "Enter your LayMatched Installer Token: " -s INSTALLER_TOKEN
     echo
     set -o history
-    if [ -z "$GHCR_TOKEN" ]; then
-        log_error "GHCR token is required."
+    if [ -z "$INSTALLER_TOKEN" ]; then
+        log_error "LayMatched Installer Token is required."
     fi
-    log_info "Using existing configuration from /opt/laymatched/.env."
+    call_auth_api "$INSTALLER_TOKEN"
+    # Use the approved version from API (could differ from stored if new release approved)
+    APP_VERSION="${APPROVED_VERSION}"
+    log_info "Using existing configuration from /opt/laymatched/.env. Approved version: ${APP_VERSION}"
 fi
 
-# -- Phase 5: Authenticate to GHCR ----------------------------------------
+# -- Phase 5: Authenticate to LayMatched Registry ----------------------------
 
-log_info "Phase 5: Authenticating to GitHub Container Registry..."
+log_info "Phase 5: Authenticating to LayMatched Container Registry..."
 
-# Authentication failure must stop installation - do not hide with || true
-if ! echo "${GHCR_TOKEN}" | docker login ghcr.io -u ibettison --password-stdin > /dev/null 2>&1; then
-    log_error "Failed to authenticate to GitHub Container Registry. Please verify your GHCR token is valid. This is a hard requirement for pulling private release images."
+# Authenticate using short-lived registry token from Auth API
+if ! echo "${REGISTRY_TOKEN}" | docker login "${REGISTRY_URL}" -u laymatched-installer --password-stdin > /dev/null 2>&1; then
+    log_error "Failed to authenticate to LayMatched Container Registry. Please verify your Installer Token is valid."
 fi
 
-log_info "Authentication to GHCR complete."
+log_info "Authentication to LayMatched Registry complete."
 
 # -- Phase 6: Create docker-compose.yml -----------------------------------
 
 log_info "Phase 6: Generating docker-compose.yml..."
 
-cat > /opt/laymatched/docker-compose.yml <<'COMPOSE_EOF'
+cat > /opt/laymatched/docker-compose.yml <<COMPOSE_EOF
 version: '3.8'
 
 services:
@@ -348,7 +380,7 @@ services:
       - laymatched_net
 
   api:
-    image: ghcr.io/ibettison/laymatched-api:${APP_VERSION}
+    image: ${REGISTRY_URL}/laymatched-api:${APP_VERSION}
     container_name: laymatched-api
     restart: unless-stopped
     depends_on:
@@ -374,7 +406,7 @@ services:
       - laymatched_net
 
   web:
-    image: ghcr.io/ibettison/laymatched-web:${APP_VERSION}
+    image: ${REGISTRY_URL}/laymatched-web:${APP_VERSION}
     container_name: laymatched-web
     restart: unless-stopped
     depends_on:

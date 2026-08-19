@@ -48,17 +48,19 @@ The installer will:
 4. Generate secure random secrets
 5. Create docker-compose.yml with multi-service stack (PostgreSQL, API, Web)
 6. Install and configure Nginx reverse proxy on port 80
-7. Pull images from GHCR and start services
-8. Run health checks
+7. Contact LayMatched authorization service for approved release and registry credentials
+8. Pull images from LayMatched registry and start services
+9. Run health checks
 
 ### What the Installer Asks For
 
 | Prompt | Description | Stored |
 |--------|-------------|--------|
-| GHCR Token | GitHub Container Registry auth token (for pulling private images) | No (used once for docker login) |
+| LayMatched Installer Token | Token from your LayMatched account (for pulling private images) | No (used once for authorization) |
 | Login ID | LayMatched username for initial admin account | Yes (in .env) |
 | Password | LayMatched password (min 12 chars, confirmed) | Yes (PBKDF2 hash in .env) |
-| Version/Tag | Release tag to install (default: `latest`) | Yes (in .env as APP_VERSION) |
+
+**Note**: The installer automatically selects the approved release version. No manual version/tag selection is required.
 
 ### Where Things Are Installed
 
@@ -109,8 +111,9 @@ sudo ./update.sh v0.1.1         # Upgrade to specific version
 ```
 
 The update script:
-- Authenticates to GHCR (prompts for token if not in environment)
-- Pulls the specified or current version
+- Authenticates to LayMatched authorization service (prompts for Installer Token if not in environment)
+- Retrieves approved release version (unless override specified)
+- Pulls the specified or approved version
 - Restarts services
 - Runs health checks
 - **Only persists new version to .env after health checks pass**
@@ -130,18 +133,19 @@ Failed updates leave the previous APP_VERSION intact.
 
 The installer is idempotent:
 - Re-running `install.sh` on an existing installation skips resource checks, Docker install, and configuration prompts
-- Only re-authenticates to GHCR and pulls/starts services
+- Only re-authenticates to LayMatched authorization service and pulls/starts services
 - Nginx config is re-applied safely
 - No secrets are regenerated or lost
 
 ## Troubleshooting
 
-### GHCR / Image Pull Failure
+### Registry / Image Pull Failure
 ```
-Error: Failed to authenticate to GitHub Container Registry
+Error: Failed to authenticate to LayMatched Container Registry
 ```
-- Verify your GHCR token has `read:packages` scope
-- Token must belong to a user with access to `ghcr.io/ibettison/laymatched-*`
+- Verify your LayMatched Installer Token is valid and not expired
+- Token must belong to a customer with active LayMatched access
+- Check network connectivity to `api.laymatched.com` and the registry
 - Re-run installer/update with a valid token
 
 ### Docker / Compose Unavailable
@@ -164,7 +168,7 @@ docker inspect --format='{{.State.Health.Status}}' laymatched-web
 
 Common causes:
 - Database not ready: API depends on healthy DB (wait longer)
-- GHCR auth expired: Re-run with valid token
+- Registry auth expired: Re-run with valid Installer Token
 - Port conflict: Ensure 80, 8080, 5432, 8000 are free
 
 ### Browser Cannot Connect / Port 80
@@ -199,19 +203,20 @@ Invalid credentials
 
 ## Known Limitations / Pre-Launch Items
 
-1. **GHCR Token Required**: Customers must provide a valid GHCR token. Future: licence-based auth.
-2. **Manual Version Selection**: Installer prompts for version. Future: auto-select approved release.
-3. **HTTP Only**: External access is HTTP on port 80. HTTPS and custom hostnames (`nickname.app.laymatched.co.uk`) coming soon.
-4. **No Automatic Backups**: PostgreSQL data in Docker volume; implement backup strategy for production.
-5. **Single-Server Only**: No clustering or HA configuration.
+1. **Installer Token Required**: Customers must provide a valid LayMatched Installer Token.
+2. **HTTP Only**: External access is HTTP on port 80. HTTPS and custom hostnames (`nickname.app.laymatched.co.uk`) coming soon.
+3. **No Automatic Backups**: PostgreSQL data in Docker volume; implement backup strategy for production.
+4. **Single-Server Only**: No clustering or HA configuration.
 
 ## Security Notes
 
-- All secrets generated independently (never derived from GHCR token)
+- All secrets generated independently (never derived from Installer Token)
 - `.env` permissions: 600, owned by root
 - Database, API, and Docker daemon never exposed publicly
 - Nginx acts as reverse proxy with security headers
 - Passwords stored as PBKDF2-SHA256 hashes (600k iterations)
+- Installer Token and Registry Token never stored on disk
+- Only approved releases available in LayMatched registry
 
 ## Development
 

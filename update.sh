@@ -17,6 +17,36 @@ log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+# -- Auth API: Exchange Installer Token for registry credentials -------------
+# Calls LayMatched Auth API to get short-lived registry token and approved version.
+# Sets: REGISTRY_TOKEN, APPROVED_VERSION, REGISTRY_URL
+
+AUTH_API_URL="https://api.laymatched.com/installer/authorize"
+
+call_auth_api() {
+    local installer_token="$1"
+    log_info "Contacting LayMatched authorization service..."
+
+    local response
+    if ! response=$(curl -fsS -X POST \
+        -H "Content-Type: application/json" \
+        -d "{\"installer_token\": \"${installer_token}\"}" \
+        "${AUTH_API_URL}" 2>/dev/null); then
+        log_error "Failed to contact LayMatched authorization service. Check network connectivity and try again."
+    fi
+
+    # Parse JSON response using python3 (available on target Ubuntu)
+    REGISTRY_TOKEN=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_token', ''))")
+    APPROVED_VERSION=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('approved_version', ''))")
+    REGISTRY_URL=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_url', ''))")
+
+    if [ -z "${REGISTRY_TOKEN}" ] || [ -z "${APPROVED_VERSION}" ] || [ -z "${REGISTRY_URL}" ]; then
+        log_error "Invalid response from authorization service. Token may be invalid or expired."
+    fi
+
+    log_info "Authorization successful. Approved version: ${APPROVED_VERSION}"
+}
+
 # -- Verify we're in the right directory --------------------------------
 
 if [ ! -f /opt/laymatched/docker-compose.yml ]; then
@@ -55,49 +85,62 @@ else
     log_info "No version override - using current: $APP_VERSION"
 fi
 
-# -- GHCR Authentication -------------------------------------------------
+# -- LayMatched Authorization ---------------------------------------------
 
-log_info "Authenticating to GitHub Container Registry..."
+log_info "Authenticating to LayMatched authorization service..."
 
-GHCR_TOKEN=""
-if [ -n "${GHCR_TOKEN:-}" ]; then
-    log_info "Using GHCR token from environment."
+INSTALLER_TOKEN=""
+if [ -n "${INSTALLER_TOKEN:-}" ]; then
+    log_info "Using Installer Token from environment."
 else
-    log_warn "GHCR_TOKEN not found in environment. Prompting for token..."
+    log_warn "INSTALLER_TOKEN not found in environment. Prompting for token..."
     set +o history
-    read -r -p "Enter your GitHub Container Registry (GHCR) authentication token: " -s GHCR_TOKEN
+    read -r -p "Enter your LayMatched Installer Token: " -s INSTALLER_TOKEN
     echo
     set -o history
-    if [ -z "$GHCR_TOKEN" ]; then
-        log_error "GHCR token is required to pull private images."
+    if [ -z "$INSTALLER_TOKEN" ]; then
+        log_error "LayMatched Installer Token is required to pull private images."
     fi
 fi
 
-# Authenticate to GHCR (failure stops update - do not hide with || true)
-if ! echo "${GHCR_TOKEN}" | docker login ghcr.io -u ibettison --password-stdin > /dev/null 2>&1; then
-    log_error "Failed to authenticate to GitHub Container Registry. Please verify your GHCR token is valid."
+# Call Auth API to get registry credentials and approved version
+call_auth_api "$INSTALLER_TOKEN"
+
+# If no version override, use the approved version from API
+if [ -z "$NEW_VERSION_ARG" ]; then
+    APP_VERSION="${APPROVED_VERSION}"
+    log_info "Using approved version from authorization service: ${APP_VERSION}"
 fi
 
-log_info "Authentication to GHCR complete."
+# -- Phase 2: Authenticate to LayMatched Registry -------------------------
 
-# -- Phase 2: Pull latest LayMatched images ------------------------------
+log_info "Authenticating to LayMatched Container Registry..."
 
-log_info "Phase 2: Pulling LayMatched release (${APP_VERSION})..."
+# Authenticate using short-lived registry token from Auth API
+if ! echo "${REGISTRY_TOKEN}" | docker login "${REGISTRY_URL}" -u laymatched-installer --password-stdin > /dev/null 2>&1; then
+    log_error "Failed to authenticate to LayMatched Container Registry. Please verify your Installer Token is valid."
+fi
+
+log_info "Authentication to LayMatched Registry complete."
+
+# -- Phase 3: Pull latest LayMatched images ------------------------------
+
+log_info "Phase 3: Pulling LayMatched release (${APP_VERSION})..."
 
 # Run docker compose from /opt/laymatched so it loads the .env file
 cd /opt/laymatched
 docker compose pull
 
-# -- Phase 3: Restart services -------------------------------------------
+# -- Phase 4: Restart services -------------------------------------------
 
-log_info "Phase 3: Restarting services..."
+log_info "Phase 4: Restarting services..."
 
 docker compose up -d
 cd - > /dev/null
 
-# -- Phase 4: Health checks ----------------------------------------------
+# -- Phase 5: Health checks ----------------------------------------------
 
-log_info "Phase 4: Running health checks..."
+log_info "Phase 5: Running health checks..."
 
 MAX_WAIT=120
 ELAPSED=0
@@ -116,13 +159,13 @@ while [ $ELAPSED -lt $MAX_WAIT ]; do
     fi
 done
 
-# -- Phase 5: Status - fail clearly if unhealthy -------------------------
+# -- Phase 6: Status - fail clearly if unhealthy -------------------------
 
 if [ $ELAPSED -ge $MAX_WAIT ]; then
     log_error "Health check timeout reached after $MAX_WAIT seconds. ${APP_NAME} is not responding. Update failed. Check container logs with: docker logs -f ${APP_NAME}"
 fi
 
-# -- Phase 6: Persist new version if override was used and update succeeded --
+# -- Phase 7: Persist new version if override was used and update succeeded --
 
 if [ -n "$NEW_VERSION_ARG" ] && [ "$APP_VERSION" != "$CURRENT_APP_VERSION" ]; then
     log_info "Persisting new version $APP_VERSION to /opt/laymatched/.env..."
@@ -131,7 +174,7 @@ if [ -n "$NEW_VERSION_ARG" ] && [ "$APP_VERSION" != "$CURRENT_APP_VERSION" ]; th
     log_info "Version updated in configuration."
 fi
 
-# -- Phase 7: Status ----------------------------------------------------
+# -- Phase 8: Status ----------------------------------------------------
 
 cat <<UPDATE_EOF
 
@@ -150,7 +193,7 @@ Logs and status:
   - Health status:   docker inspect --format='{{.State.Health.Status}}' laymatched-web
 
 Configuration preserved:
-  - /opt/laymatched/.env    - generated secrets, version, and APP_VERSION (GHCR_TOKEN not stored)
+  - /opt/laymatched/.env    - generated secrets, version, and APP_VERSION (Installer Token not stored)
   - /opt/laymatched/data    - persistent application data (Docker volumes: postgres_data, bookmaker_icon_cache)
 
 ================================================================================
