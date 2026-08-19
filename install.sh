@@ -119,7 +119,7 @@ if [ -z "$TOTAL_MEM_MB" ] || [ "$TOTAL_MEM_MB" -lt 2048 ]; then
 fi
 
 # Check available disk space (GB) - minimum 2GB for /opt/laymatched
-AVAILABLE_DISK_GB=$(df -BG /opt 2>/dev/null | awk 'NR==2 {print $4}' | tr -GdG)
+AVAILABLE_DISK_GB=$(df -BG /opt 2>/dev/null | awk 'NR==2 {gsub(/G/, "", $4); print $4}')
 AVAILABLE_DISK_GB=${AVAILABLE_DISK_GB:-0}
 if [ "$AVAILABLE_DISK_GB" -lt 2 ]; then
     log_error "Insufficient disk space for LayMatched installation. At least 2GB required (available: ${AVAILABLE_DISK_GB}GB)."
