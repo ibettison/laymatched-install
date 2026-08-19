@@ -176,6 +176,22 @@ else
     log_info "Docker already present; skipping Engine installation."
 fi
 
+# -- Verify Docker Compose plugin is available -----------------------------
+
+log_info "Verifying Docker Compose plugin..."
+
+if ! docker compose version > /dev/null 2>&1; then
+    log_warn "Docker Compose plugin not available - attempting to install..."
+    apt-get update
+    if apt-get install -y docker-compose-plugin; then
+        log_info "Docker Compose plugin installed successfully."
+    else
+        log_error "Failed to install Docker Compose plugin. Please install it manually: apt-get install docker-compose-plugin"
+    fi
+else
+    log_info "Docker Compose plugin verified: $(docker compose version --short)"
+fi
+
 # -- Phase 3: Create /opt/laymatched --------------------------------------
 
 log_info "Phase 3: Creating /opt/laymatched..."

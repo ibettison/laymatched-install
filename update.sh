@@ -27,9 +27,33 @@ if [ ! -f /opt/laymatched/.env ]; then
     log_error "Configuration file /opt/laymatched/.env not found. Run install.sh first."
 fi
 
-# Load only APP_VERSION from .env safely (without expanding $$ in AUTH_PASSWORD_HASH)
-# Use a safe parser that doesn't evaluate shell expansions
-APP_VERSION=$(grep '^APP_VERSION=' /opt/laymatched/.env | cut -d'=' -f2-)
+# -- Parse version override argument --------------------------------------
+# Usage: update.sh [NEW_VERSION]
+# If NEW_VERSION is provided, use it for this update and persist on success.
+# If not provided, use current APP_VERSION from .env.
+
+NEW_VERSION_ARG="${1:-}"
+
+# Load current APP_VERSION from .env safely (without expanding $$ in AUTH_PASSWORD_HASH)
+CURRENT_APP_VERSION=$(grep '^APP_VERSION=' /opt/laymatched/.env | cut -d'=' -f2-)
+
+if [ -n "$NEW_VERSION_ARG" ]; then
+    # Validate version argument: non-empty, reasonable format
+    if [ -z "$NEW_VERSION_ARG" ]; then
+        log_error "Version argument provided but empty."
+    fi
+    # Basic sanity: version should not contain spaces or shell metacharacters
+    case "$NEW_VERSION_ARG" in
+        *[[:space:]]*|*[\$\`\;]*)
+            log_error "Invalid version format: '$NEW_VERSION_ARG'. Use a valid tag like 'v0.1.1' or 'latest'."
+            ;;
+    esac
+    APP_VERSION="$NEW_VERSION_ARG"
+    log_info "Version override specified: $APP_VERSION (current: $CURRENT_APP_VERSION)"
+else
+    APP_VERSION="$CURRENT_APP_VERSION"
+    log_info "No version override - using current: $APP_VERSION"
+fi
 
 # -- GHCR Authentication -------------------------------------------------
 
@@ -58,7 +82,7 @@ log_info "Authentication to GHCR complete."
 
 # -- Phase 2: Pull latest LayMatched images ------------------------------
 
-log_info "Phase 2: Pulling latest LayMatched release (${APP_VERSION})..."
+log_info "Phase 2: Pulling LayMatched release (${APP_VERSION})..."
 
 # Run docker compose from /opt/laymatched so it loads the .env file
 cd /opt/laymatched
@@ -98,7 +122,16 @@ if [ $ELAPSED -ge $MAX_WAIT ]; then
     log_error "Health check timeout reached after $MAX_WAIT seconds. ${APP_NAME} is not responding. Update failed. Check container logs with: docker logs -f ${APP_NAME}"
 fi
 
-# -- Phase 5: Status ----------------------------------------------------
+# -- Phase 6: Persist new version if override was used and update succeeded --
+
+if [ -n "$NEW_VERSION_ARG" ] && [ "$APP_VERSION" != "$CURRENT_APP_VERSION" ]; then
+    log_info "Persisting new version $APP_VERSION to /opt/laymatched/.env..."
+    # Use sed to replace only the APP_VERSION line, preserving all other secrets
+    sed -i "s/^APP_VERSION=.*/APP_VERSION=${APP_VERSION}/" /opt/laymatched/.env
+    log_info "Version updated in configuration."
+fi
+
+# -- Phase 7: Status ----------------------------------------------------
 
 cat <<UPDATE_EOF
 
