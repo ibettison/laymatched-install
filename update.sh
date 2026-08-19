@@ -99,6 +99,8 @@ NEW_VERSION_ARG="${1:-}"
 
 # Load current APP_VERSION from .env safely (without expanding $$ in AUTH_PASSWORD_HASH)
 CURRENT_APP_VERSION=$(grep '^APP_VERSION=' /opt/laymatched/.env | cut -d'=' -f2-)
+# Load REGISTRY_URL if present (legacy .env may not have it)
+CURRENT_REGISTRY_URL=$(grep '^REGISTRY_URL=' /opt/laymatched/.env | cut -d'=' -f2-)
 
 if [ -n "$NEW_VERSION_ARG" ]; then
     # Validate version argument using the same validation function
@@ -164,9 +166,14 @@ log_info "Phase 3: Preparing candidate deployment environment..."
 # Create candidate .env by copying persistent .env and updating candidate values
 cd /opt/laymatched
 cp .env .env.candidate
-# Update candidate APP_VERSION and REGISTRY_URL
+# Update candidate APP_VERSION
 sed -i "s/^APP_VERSION=.*/APP_VERSION=${CANDIDATE_VERSION}/" .env.candidate
-sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" .env.candidate
+# Handle REGISTRY_URL: replace if exists, append if missing (legacy .env migration)
+if grep -q '^REGISTRY_URL=' .env.candidate; then
+    sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" .env.candidate
+else
+    echo "REGISTRY_URL=${CANDIDATE_REGISTRY_URL}" >> .env.candidate
+fi
 
 # -- Phase 4: Pull candidate LayMatched images -----------------------------
 
@@ -225,9 +232,14 @@ if [ "$CANDIDATE_VERSION" != "$CURRENT_APP_VERSION" ]; then
 fi
 
 CURRENT_REGISTRY_URL=$(grep '^REGISTRY_URL=' /opt/laymatched/.env | cut -d'=' -f2-)
-if [ "$CANDIDATE_REGISTRY_URL" != "$CURRENT_REGISTRY_URL" ]; then
-    log_info "Updating registry URL in /opt/laymatched/.env..."
-    sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" .env
+# Persist registry URL if it changed (or is missing - legacy migration)
+if [ -z "${CURRENT_REGISTRY_URL:-}" ] || [ "$CANDIDATE_REGISTRY_URL" != "$CURRENT_REGISTRY_URL" ]; then
+    log_info "Persisting registry URL ${CANDIDATE_REGISTRY_URL} to /opt/laymatched/.env..."
+    if grep -q '^REGISTRY_URL=' .env; then
+        sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" .env
+    else
+        echo "REGISTRY_URL=${CANDIDATE_REGISTRY_URL}" >> .env
+    fi
 fi
 
 # Regenerate docker-compose.yml with updated configuration (uses persistent .env)

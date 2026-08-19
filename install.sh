@@ -279,6 +279,8 @@ if [ -f /opt/laymatched/.env ]; then
     # Load only APP_VERSION from .env safely (without expanding $$ in AUTH_PASSWORD_HASH)
     # Use a safe parser that doesn't evaluate shell expansions
     APP_VERSION=$(grep '^APP_VERSION=' /opt/laymatched/.env | cut -d'=' -f2-)
+    # Load REGISTRY_URL if present (legacy .env may not have it)
+    REGISTRY_URL=$(grep '^REGISTRY_URL=' /opt/laymatched/.env | cut -d'=' -f2-)
 fi
 
 if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
@@ -382,7 +384,12 @@ else
     cd /opt/laymatched
     cp .env .env.candidate
     sed -i "s/^APP_VERSION=.*/APP_VERSION=${APP_VERSION}/" .env.candidate
-    sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" .env.candidate
+    # Handle REGISTRY_URL: replace if exists, append if missing (legacy .env migration)
+    if grep -q '^REGISTRY_URL=' .env.candidate; then
+        sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" .env.candidate
+    else
+        echo "REGISTRY_URL=${CANDIDATE_REGISTRY_URL}" >> .env.candidate
+    fi
     cd - > /dev/null
 fi
 
@@ -633,10 +640,14 @@ if [ "${CONFIG_ALREADY_PROVIDED}" = "true" ]; then
         log_info "Version updated in configuration."
     fi
 
-    # Persist registry URL if it changed
-    if [ -n "${ORIGINAL_REGISTRY_URL:-}" ] && [ "${CANDIDATE_REGISTRY_URL}" != "${ORIGINAL_REGISTRY_URL}" ]; then
-        log_info "Persisting updated registry URL ${CANDIDATE_REGISTRY_URL} to /opt/laymatched/.env..."
-        sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" /opt/laymatched/.env
+    # Persist registry URL if it changed (or is missing - legacy migration)
+    if [ -z "${ORIGINAL_REGISTRY_URL:-}" ] || [ "${CANDIDATE_REGISTRY_URL}" != "${ORIGINAL_REGISTRY_URL}" ]; then
+        log_info "Persisting registry URL ${CANDIDATE_REGISTRY_URL} to /opt/laymatched/.env..."
+        if grep -q '^REGISTRY_URL=' /opt/laymatched/.env; then
+            sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" /opt/laymatched/.env
+        else
+            echo "REGISTRY_URL=${CANDIDATE_REGISTRY_URL}" >> /opt/laymatched/.env
+        fi
         log_info "Registry URL updated in configuration."
     fi
 
