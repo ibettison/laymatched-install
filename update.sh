@@ -36,8 +36,11 @@ set +a
 
 log_info "Authenticating to GitHub Container Registry..."
 
-if [ -z "${GHCR_TOKEN:-}" ]; then
-    log_warn "GHCR_TOKEN not found in .env. Prompting for token..."
+GHCR_TOKEN=""
+if [ -n "${GHCR_TOKEN:-}" ]; then
+    log_info "Using GHCR token from environment."
+else
+    log_warn "GHCR_TOKEN not found in environment. Prompting for token..."
     set +o history
     read -r -p "Enter your GitHub Container Registry (GHCR) authentication token: " -s GHCR_TOKEN
     echo
@@ -45,8 +48,6 @@ if [ -z "${GHCR_TOKEN:-}" ]; then
     if [ -z "$GHCR_TOKEN" ]; then
         log_error "GHCR token is required to pull private images."
     fi
-    # Update .env with the new token
-    sed -i "s/^GHCR_TOKEN=.*/GHCR_TOKEN=${GHCR_TOKEN}/" /opt/laymatched/.env
 fi
 
 # Authenticate to GHCR (failure stops update - do not hide with || true)
@@ -105,7 +106,7 @@ LAYMATCHED UPDATE COMPLETE
 
 Updated to version: ${APP_VERSION}
 
-  - Puller latest image: docker compose -f /opt/laymatched/docker-compose.yml pull
+  - Pulled latest image: docker compose -f /opt/laymatched/docker-compose.yml pull
   - Restarted services: docker compose -f /opt/laymatched/docker-compose.yml up -d
 
 Logs and status:
@@ -114,7 +115,7 @@ Logs and status:
   - Health status:   docker inspect --format='{{.State.Health.Status}}' laymatched-web
 
 Configuration preserved:
-  - /opt/laymatched/.env    - generated secrets, version, and APP_VERSION
+  - /opt/laymatched/.env    - generated secrets, version, and APP_VERSION (GHCR_TOKEN not stored)
   - /opt/laymatched/data    - persistent application data (Docker volumes: postgres_data, bookmaker_icon_cache)
 
 ================================================================================

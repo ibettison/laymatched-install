@@ -49,18 +49,37 @@ is_supported_release() {
     esac
 }
 
-# -- Generate strong random password ------------------------------------------
+# -- Generate strong random secret (for DB, sessions, keys) --------------------
 
-generate_password() {
-    local length=${1:-16}
-    if command -v python3 > /dev/null 2>&1; then
-        # Generate PBKDF2 hash in Django-supported format: pbkdf2_sha256$<iterations>$<salt>$<hash>
-        local iterations=${2:-210000}
-        python3 -c "import sys,hashlib,base64;s=hashlib.pbkdf2_hmac('sha256',b'laymatched-salt',b'password',int(sys.argv[1]),dklen=32);print(f'pbkdf2_sha256${sys.argv[1]}${base64.b64encode(s[:16].encode()).decode()}${base64.b64encode(s[16:].encode()).decode()}')" "$iterations"
-    elif command -v openssl > /dev/null 2>&1; then
+generate_secret() {
+    local length=${1:-32}
+    if command -v openssl > /dev/null 2>&1; then
         openssl rand -hex $((length / 2))
+    elif command -v python3 > /dev/null 2>&1; then
+        python3 -c "import secrets; print(secrets.token_hex($((length // 2))))"
     else
-        head -c "${length}" < /dev/urandom | base64 | tr -dc 'a-zA-Z0-9!@#$%^&*()_-+=' | head -c "${length}"
+        head -c "${length}" < /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c "${length}"
+    fi
+}
+
+# -- Generate Django-compatible PBKDF2 password hash ----------------------------
+
+generate_password_hash() {
+    local password="$1"
+    if [ -z "$password" ]; then
+        log_error "Password cannot be empty."
+    fi
+    if command -v python3 > /dev/null 2>&1; then
+        python3 -c "
+import hashlib, base64, secrets, sys
+password = sys.argv[1].encode()
+salt = secrets.token_bytes(16)
+iterations = 210000
+dk = hashlib.pbkdf2_hmac('sha256', password, salt, iterations, dklen=32)
+print(f'pbkdf2_sha256\${iterations}\${base64.b64encode(salt).decode()}\${base64.b64encode(dk).decode()}')
+" "$password"
+    else
+        log_error "Python3 is required to generate password hash."
     fi
 }
 
@@ -176,7 +195,7 @@ fi
 if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     log_info "Phase 4: Collecting customer configuration..."
 
-    # Prompt for GHCR authentication token (never stored in repo)
+    # Prompt for GHCR authentication token (never stored in .env, never in repo)
     # Prevent token from appearing in shell history
     set +o history
     read -r -p "Enter your GitHub Container Registry (GHCR) authentication token: " -s GHCR_TOKEN
@@ -186,24 +205,34 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
         log_error "GHCR token is required."
     fi
 
+    # Prompt for LayMatched login password (used to generate AUTH_PASSWORD_HASH)
+    # This is the password users will use to log into the LayMatched web UI
+    set +o history
+    read -r -p "Enter the LayMatched login password for the web UI: " -s LAYMATCHED_PASSWORD
+    echo
+    set -o history
+    if [ -z "$LAYMATCHED_PASSWORD" ]; then
+        log_error "LayMatched login password is required."
+    fi
+
     # Prompt for application version/tag
     read -r -p "Enter the LayMatched release version/tag (e.g., latest, v1.2.3): " APP_VERSION
     if [ -z "$APP_VERSION" ]; then
         APP_VERSION="latest"
     fi
 
-    # Generate strong random passwords - NEVER reuse GHCR_TOKEN as DB or app credentials
-    POSTGRES_PASSWORD=$(generate_password 24)
-    AUTH_PASSWORD_HASH=$(generate_password 32)
-    AUTH_SESSION_SECRET=$(generate_password 32)
-    COMMUNITY_INSTALLATION_KEY=$(generate_password 32)
-    COMMUNITY_ATTRIBUTION_SECRET=$(generate_password 32)
+    # Generate strong random secrets - NEVER reuse GHCR_TOKEN as DB or app credentials
+    POSTGRES_PASSWORD=$(generate_secret 24)
+    AUTH_SESSION_SECRET=$(generate_secret 32)
+    COMMUNITY_INSTALLATION_KEY=$(generate_secret 32)
+    COMMUNITY_ATTRIBUTION_SECRET=$(generate_secret 32)
+    AUTH_PASSWORD_HASH=$(generate_password_hash "$LAYMATCHED_PASSWORD")
 
     # Store configuration outside the repo in /opt/laymatched
     # This file is not tracked by git and contains sensitive credentials
+    # GHCR_TOKEN is NOT persisted - only used for initial docker login
     cat > /opt/laymatched/.env <<EOF
 APP_VERSION=${APP_VERSION}
-GHCR_TOKEN=${GHCR_TOKEN}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
 AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
@@ -265,7 +294,7 @@ services:
       db:
         condition: service_healthy
     volumes:
-      - /var/lib/laymatchedbetting/bookmaker-icons:/app/bookmaker_icon_cache
+      - bookmaker_icon_cache:/var/lib/laymatchedbetting/bookmaker-icons
     environment:
       - DATABASE_URL=postgresql+psycopg://laymatched:${POSTGRES_PASSWORD}@db:5432/laymatched_betting
       - AUTH_USERNAME=laymatched
@@ -275,7 +304,7 @@ services:
       - COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY}
       - COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET}
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -295,7 +324,7 @@ services:
     ports:
       - "127.0.0.1:${APP_PORT:-8080}:80"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:${APP_PORT:-8080}/app/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/app/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -370,8 +399,6 @@ Installation summary:
 
 Ports configured (all private/loopback only):
   - HTTP (8080)    Bound to 127.0.0.1 only - Web frontend (127.0.0.1:${APP_PORT:-8080}:80)
-  - API (8000)     Bound to 127.0.0.1 only - API service (127.0.0.1:8000:8000)
-  - PostgreSQL (5432) Bound to 127.0.0.1 only - Database (127.0.0.1:5432:5432)
 
 Volumes (persistent data):
   - postgres_data    - PostgreSQL data directory
