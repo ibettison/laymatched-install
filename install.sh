@@ -62,22 +62,55 @@ generate_secret() {
     fi
 }
 
-# -- Generate Django-compatible PBKDF2 password hash ----------------------------
+# -- Generate auth credentials matching backend/scripts/create_credentials.py ---
+# Prompts for login ID and password, returns AUTH_USERNAME and AUTH_PASSWORD_HASH
+# Format: pbkdf2_sha256$$600000$$<urlsafe_b64_salt>$$<urlsafe_b64_digest>
 
-generate_password_hash() {
-    local password="$1"
-    if [ -z "$password" ]; then
-        log_error "Password cannot be empty."
-    fi
+generate_auth_credentials() {
+    # Prompt for Login ID
+    local login_id=""
+    while [ -z "$login_id" ]; do
+        read -r -p "Enter LayMatched Login ID: " login_id
+        if [ -z "$login_id" ]; then
+            log_error "Login ID cannot be empty."
+        fi
+    done
+
+    # Prompt for password (hidden)
+    local password=""
+    local password_confirm=""
+    while true; do
+        set +o history
+        read -r -p "Enter LayMatched password (min 12 chars): " -s password
+        echo
+        read -r -p "Confirm LayMatched password: " -s password_confirm
+        echo
+        set -o history
+
+        if [ ${#password} -lt 12 ]; then
+            log_warn "Password must be at least 12 characters."
+            continue
+        fi
+        if [ "$password" != "$password_confirm" ]; then
+            log_warn "Passwords do not match."
+            continue
+        fi
+        break
+    done
+
+    # Generate PBKDF2 hash matching authoritative generator exactly
     if command -v python3 > /dev/null 2>&1; then
         python3 -c "
 import hashlib, base64, secrets, sys
-password = sys.argv[1].encode()
-salt = secrets.token_bytes(16)
-iterations = 210000
+username = sys.argv[1]
+password = sys.argv[2].encode()
+salt = secrets.token_bytes(18)
+iterations = 600000
 dk = hashlib.pbkdf2_hmac('sha256', password, salt, iterations, dklen=32)
-print(f'pbkdf2_sha256\${iterations}\${base64.b64encode(salt).decode()}\${base64.b64encode(dk).decode()}')
-" "$password"
+salt_b64 = base64.urlsafe_b64encode(salt).decode().rstrip('=')
+dk_b64 = base64.urlsafe_b64encode(dk).decode().rstrip('=')
+print(f'{username}$${iterations}$${salt_b64}$${dk_b64}')
+" "$login_id" "$password"
     else
         log_error "Python3 is required to generate password hash."
     fi
@@ -205,15 +238,11 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
         log_error "GHCR token is required."
     fi
 
-    # Prompt for LayMatched login password (used to generate AUTH_PASSWORD_HASH)
-    # This is the password users will use to log into the LayMatched web UI
-    set +o history
-    read -r -p "Enter the LayMatched login password for the web UI: " -s LAYMATCHED_PASSWORD
-    echo
-    set -o history
-    if [ -z "$LAYMATCHED_PASSWORD" ]; then
-        log_error "LayMatched login password is required."
-    fi
+    # Prompt for LayMatched login credentials (matches backend/scripts/create_credentials.py)
+    # Returns: AUTH_USERNAME$$600000$$<salt>$$<digest>
+    AUTH_CREDENTIALS=$(generate_auth_credentials)
+    AUTH_USERNAME=$(echo "$AUTH_CREDENTIALS" | cut -d'$' -f1)
+    AUTH_PASSWORD_HASH=$(echo "$AUTH_CREDENTIALS" | cut -d'$' -f2-)
 
     # Prompt for application version/tag
     read -r -p "Enter the LayMatched release version/tag (e.g., latest, v1.2.3): " APP_VERSION
@@ -226,7 +255,6 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     AUTH_SESSION_SECRET=$(generate_secret 32)
     COMMUNITY_INSTALLATION_KEY=$(generate_secret 32)
     COMMUNITY_ATTRIBUTION_SECRET=$(generate_secret 32)
-    AUTH_PASSWORD_HASH=$(generate_password_hash "$LAYMATCHED_PASSWORD")
 
     # Store configuration outside the repo in /opt/laymatched
     # This file is not tracked by git and contains sensitive credentials
@@ -234,6 +262,7 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     cat > /opt/laymatched/.env <<EOF
 APP_VERSION=${APP_VERSION}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+AUTH_USERNAME=${AUTH_USERNAME}
 AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
 AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
 AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
@@ -297,7 +326,7 @@ services:
       - bookmaker_icon_cache:/var/lib/laymatchedbetting/bookmaker-icons
     environment:
       - DATABASE_URL=postgresql+psycopg://laymatched:${POSTGRES_PASSWORD}@db:5432/laymatched_betting
-      - AUTH_USERNAME=laymatched
+      - AUTH_USERNAME=${AUTH_USERNAME}
       - AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
       - AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
       - AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
