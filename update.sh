@@ -27,10 +27,9 @@ if [ ! -f /opt/laymatched/.env ]; then
     log_error "Configuration file /opt/laymatched/.env not found. Run install.sh first."
 fi
 
-# Load environment config (read-only, never export secrets)
-set -a
-source /opt/laymatched/.env
-set +a
+# Load only APP_VERSION from .env safely (without expanding $$ in AUTH_PASSWORD_HASH)
+# Use a safe parser that doesn't evaluate shell expansions
+APP_VERSION=$(grep '^APP_VERSION=' /opt/laymatched/.env | cut -d'=' -f2-)
 
 # -- GHCR Authentication -------------------------------------------------
 
