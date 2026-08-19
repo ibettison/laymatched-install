@@ -381,6 +381,85 @@ COMPOSE_EOF
 
 log_info "docker-compose.yml generated."
 
+# -- Phase 6b: Install and configure Nginx reverse proxy -------------------
+
+log_info "Phase 6b: Installing and configuring Nginx reverse proxy..."
+
+# Install Nginx if not already installed
+NGINX_ALREADY_INSTALLED=false
+if command -v nginx > /dev/null 2>&1; then
+    log_info "Nginx appears already installed - skipping package installation."
+    NGINX_ALREADY_INSTALLED=true
+fi
+
+if [ "$NGINX_ALREADY_INSTALLED" = "false" ]; then
+    apt-get update
+    apt-get install -y nginx
+    log_info "Nginx installed successfully."
+else
+    log_info "Nginx already present; skipping package installation."
+fi
+
+# Create LayMatched Nginx site configuration
+cat > /etc/nginx/sites-available/laymatched <<'NGINX_EOF'
+server {
+    listen 80;
+    server_name _;
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN";
+    add_header X-Content-Type-Options "nosniff";
+    add_header Referrer-Policy "strict-origin-when-cross-origin";
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket support
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        # Timeouts
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Health endpoint for load balancer checks
+    location /nginx-health {
+        access_log off;
+        return 200 "healthy\n";
+        add_header Content-Type text/plain;
+    }
+}
+NGINX_EOF
+
+log_info "Nginx site configuration created at /etc/nginx/sites-available/laymatched."
+
+# Enable LayMatched site and disable default site
+ln -sf /etc/nginx/sites-available/laymatched /etc/nginx/sites-enabled/laymatched
+rm -f /etc/nginx/sites-enabled/default
+log_info "Nginx site enabled (default site disabled)."
+
+# Validate Nginx configuration
+if ! nginx -t; then
+    log_error "Nginx configuration test failed."
+fi
+log_info "Nginx configuration test passed."
+
+# Start or reload Nginx
+if systemctl is-active --quiet nginx; then
+    systemctl reload nginx
+    log_info "Nginx reloaded."
+else
+    systemctl enable --now nginx
+    log_info "Nginx enabled and started."
+fi
+
 # Copy update.sh to installation directory for future updates
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cp "${SCRIPT_DIR}/update.sh" /opt/laymatched/update.sh
@@ -441,8 +520,9 @@ Installation summary:
   - Version:       ${APP_VERSION}
   - Data directory: /opt/laymatched
 
-Ports configured (all private/loopback only):
-  - HTTP (8080)    Bound to 127.0.0.1 only - Web frontend (127.0.0.1:${APP_PORT:-8080}:80)
+Ports configured:
+  - HTTP (80)      Public via Nginx reverse proxy - Web frontend (external access)
+  - HTTP (8080)    Bound to 127.0.0.1 only - Web frontend (internal, proxied by Nginx)
 
 Volumes (persistent data):
   - postgres_data    - PostgreSQL data directory
