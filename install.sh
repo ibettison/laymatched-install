@@ -376,6 +376,14 @@ else
     # Candidate registry URL - will be persisted only after health checks pass
     CANDIDATE_REGISTRY_URL="${REGISTRY_URL}"
     log_info "Using existing configuration from /opt/laymatched/.env. Approved version: ${APP_VERSION}"
+
+    # -- Prepare candidate .env for rerun deployment -----------------------
+    # Create candidate .env with new version/registry for Compose interpolation
+    cd /opt/laymatched
+    cp .env .env.candidate
+    sed -i "s/^APP_VERSION=.*/APP_VERSION=${APP_VERSION}/" .env.candidate
+    sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" .env.candidate
+    cd - > /dev/null
 fi
 
 # -- Phase 5: Authenticate to LayMatched Registry ----------------------------
@@ -562,10 +570,20 @@ log_info "update.sh copied to /opt/laymatched/"
 
 log_info "Phase 7: Pulling approved LayMatched release and starting services..."
 
-# Run docker compose from /opt/laymatched so it loads the .env file
+# Run docker compose from /opt/laymatched
 cd /opt/laymatched
-docker compose pull
-docker compose up -d
+
+# For rerun: use candidate .env with new version/registry
+# For fresh install: use persistent .env (already has correct values)
+if [ "${CONFIG_ALREADY_PROVIDED}" = "true" ]; then
+    log_info "Rerun detected - deploying candidate release..."
+    docker compose --env-file .env.candidate pull
+    docker compose --env-file .env.candidate up -d
+else
+    log_info "Fresh install - deploying approved release..."
+    docker compose pull
+    docker compose up -d
+fi
 cd - > /dev/null
 
 log_info "Services started."
@@ -597,21 +615,116 @@ done
 if [ "$HEALTHY" = "true" ]; then
     log_info "Health checks passed."
 else
+    # Clean up candidate env on failure (rerun only)
+    if [ "${CONFIG_ALREADY_PROVIDED}" = "true" ]; then
+        rm -f /opt/laymatched/.env.candidate
+    fi
     log_error "Health check timeout reached after $MAX_WAIT seconds. LayMatched Web is not responding. Check container logs with: docker logs -f laymatched-web"
 fi
 
-# -- Persist version if it changed (rerun with newer approved release) --------
-if [ -n "${ORIGINAL_APP_VERSION:-}" ] && [ "$APP_VERSION" != "$ORIGINAL_APP_VERSION" ]; then
-    log_info "Persisting updated version $APP_VERSION to /opt/laymatched/.env..."
-    sed -i "s/^APP_VERSION=.*/APP_VERSION=${APP_VERSION}/" /opt/laymatched/.env
-    log_info "Version updated in configuration."
-fi
+# -- Post-health persistence (rerun only) -----------------------------------
+if [ "${CONFIG_ALREADY_PROVIDED}" = "true" ]; then
+    log_info "Rerun successful - persisting candidate configuration..."
 
-# -- Persist registry URL if it changed (rerun with registry migration) -------
-if [ -n "${ORIGINAL_REGISTRY_URL:-}" ] && [ "${CANDIDATE_REGISTRY_URL}" != "${ORIGINAL_REGISTRY_URL}" ]; then
-    log_info "Persisting updated registry URL ${CANDIDATE_REGISTRY_URL} to /opt/laymatched/.env..."
-    sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" /opt/laymatched/.env
-    log_info "Registry URL updated in configuration."
+    # Persist version if it changed
+    if [ -n "${ORIGINAL_APP_VERSION:-}" ] && [ "$APP_VERSION" != "$ORIGINAL_APP_VERSION" ]; then
+        log_info "Persisting updated version $APP_VERSION to /opt/laymatched/.env..."
+        sed -i "s/^APP_VERSION=.*/APP_VERSION=${APP_VERSION}/" /opt/laymatched/.env
+        log_info "Version updated in configuration."
+    fi
+
+    # Persist registry URL if it changed
+    if [ -n "${ORIGINAL_REGISTRY_URL:-}" ] && [ "${CANDIDATE_REGISTRY_URL}" != "${ORIGINAL_REGISTRY_URL}" ]; then
+        log_info "Persisting updated registry URL ${CANDIDATE_REGISTRY_URL} to /opt/laymatched/.env..."
+        sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" /opt/laymatched/.env
+        log_info "Registry URL updated in configuration."
+    fi
+
+    # Regenerate docker-compose.yml with updated configuration (uses persistent .env)
+    cd /opt/laymatched
+    cat > /opt/laymatched/docker-compose.yml <<'COMPOSE_EOF'
+version: '3.8'
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: laymatched-db
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=laymatched_betting
+      - POSTGRES_USER=laymatched
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U laymatched -d laymatched_betting"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - laymatched_net
+
+  api:
+    image: ${REGISTRY_URL}/laymatched-api:${APP_VERSION}
+    container_name: laymatched-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - bookmaker_icon_cache:/var/lib/laymatchedbetting/bookmaker-icons
+    environment:
+      - DATABASE_URL=postgresql+psycopg://laymatched:${POSTGRES_PASSWORD}@db:5432/laymatched_betting
+      - AUTH_USERNAME=${AUTH_USERNAME}
+      - AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
+      - AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
+      - AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
+      - COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY}
+      - COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - laymatched_net
+
+  web:
+    image: ${REGISTRY_URL}/laymatched-web:${APP_VERSION}
+    container_name: laymatched-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      - API_URL=http://api:8000
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/app/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - laymatched_net
+
+volumes:
+  postgres_data:
+  bookmaker_icon_cache:
+
+networks:
+  laymatched_net:
+    driver: bridge
+COMPOSE_EOF
+
+    # Clean up candidate env file
+    rm -f .env.candidate
+    cd - > /dev/null
+
+    log_info "docker-compose.yml regenerated with updated version and registry."
 fi
 
 # -- Phase 9: Status/instructions ----------------------------------------
