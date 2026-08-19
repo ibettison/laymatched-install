@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  auth-api:
+    image: laymatched-auth-api:latest
+    container_name: laymatched-auth-api
+    restart: unless-stopped
+    environment:
+      - PORT=8443
+      - DB_PATH=/data/auth-tokens.db
+      - APPROVED_VERSION=${APPROVED_VERSION:-v0.1.0}
+      - REGISTRY_URL=registry.laymatched.io
+      - PRIVATE_KEY_PATH=/data/private.pem
+      - PUBLIC_KEY_PATH=/data/public.pem
+      - RATE_LIMIT_PER_MIN=50
+      - LOG_LEVEL=info
+    volumes:
+      - auth-data:/data
+    networks:
+      - laymatched-internal
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8443/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  registry:
+    image: laymatched-registry:latest
+    container_name: laymatched-registry
+    restart: unless-stopped
+    environment:
+      - REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry
+    volumes:
+      - registry-data:/var/lib/registry
+      - ./registry/certs:/certs:ro
+    networks:
+      - laymatched-internal
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:5000/v2/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: laymatched-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deployment/nginx:/etc/nginx/conf.d:ro
+      - ./deployment/certs:/etc/nginx/certs:ro
+      - ./deployment/nginx/laymatched.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - laymatched-internal
+      - laymatched-external
+    depends_on:
+      - auth-api
+      - registry
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  auth-data:
+    driver: local
+    driver_opts:
+      type: none
+      device: /opt/laymatched-auth/data
+      o: bind
+  registry-data:
+    driver: local
+    driver_opts:
+      type: none
+      device: /opt/laymatched-registry/data
+      o: bind
+
+networks:
+  laymatched-internal:
+    driver: bridge
+    internal: true
+  laymatched-external:
+    driver: bridge
