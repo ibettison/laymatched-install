@@ -23,14 +23,39 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 AUTH_API_URL="https://api.laymatched.com/installer/authorize"
 
+# Validate version string: alphanumeric, dots, dashes, underscores only
+validate_version() {
+    local version="$1"
+    case "$version" in
+        *[![:alnum:]._-]*) return 1 ;;
+        "") return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# Validate registry URL: must be a valid hostname (no scheme, no path)
+validate_registry_url() {
+    local url="$1"
+    # Allow hostname:port or just hostname
+    case "$url" in
+        *[![:alnum:].:-]*) return 1 ;;
+        "") return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 call_auth_api() {
     local installer_token="$1"
     log_info "Contacting LayMatched authorization service..."
 
+    # Build JSON safely using python3 to avoid injection issues
+    local json_payload
+    json_payload=$(python3 -c "import json, sys; print(json.dumps({'installer_token': sys.argv[1])})" "$installer_token")
+
     local response
     if ! response=$(curl -fsS -X POST \
         -H "Content-Type: application/json" \
-        -d "{\"installer_token\": \"${installer_token}\"}" \
+        -d "$json_payload" \
         "${AUTH_API_URL}" 2>/dev/null); then
         log_error "Failed to contact LayMatched authorization service. Check network connectivity and try again."
     fi
@@ -42,6 +67,14 @@ call_auth_api() {
 
     if [ -z "${REGISTRY_TOKEN}" ] || [ -z "${APPROVED_VERSION}" ] || [ -z "${REGISTRY_URL}" ]; then
         log_error "Invalid response from authorization service. Token may be invalid or expired."
+    fi
+
+    # Validate approved_version and registry_url before use
+    if ! validate_version "${APPROVED_VERSION}"; then
+        log_error "Invalid approved_version from authorization service: ${APPROVED_VERSION}"
+    fi
+    if ! validate_registry_url "${REGISTRY_URL}"; then
+        log_error "Invalid registry_url from authorization service: ${REGISTRY_URL}"
     fi
 
     log_info "Authorization successful. Approved version: ${APPROVED_VERSION}"
@@ -68,16 +101,10 @@ NEW_VERSION_ARG="${1:-}"
 CURRENT_APP_VERSION=$(grep '^APP_VERSION=' /opt/laymatched/.env | cut -d'=' -f2-)
 
 if [ -n "$NEW_VERSION_ARG" ]; then
-    # Validate version argument: non-empty, reasonable format
-    if [ -z "$NEW_VERSION_ARG" ]; then
-        log_error "Version argument provided but empty."
+    # Validate version argument using the same validation function
+    if ! validate_version "$NEW_VERSION_ARG"; then
+        log_error "Invalid version format: '$NEW_VERSION_ARG'. Use a valid tag like 'v0.1.1' or 'latest'."
     fi
-    # Basic sanity: version should not contain spaces or shell metacharacters
-    case "$NEW_VERSION_ARG" in
-        *[[:space:]]*|*[\$\`\;]*)
-            log_error "Invalid version format: '$NEW_VERSION_ARG'. Use a valid tag like 'v0.1.1' or 'latest'."
-            ;;
-    esac
     APP_VERSION="$NEW_VERSION_ARG"
     log_info "Version override specified: $APP_VERSION (current: $CURRENT_APP_VERSION)"
 else
@@ -165,9 +192,9 @@ if [ $ELAPSED -ge $MAX_WAIT ]; then
     log_error "Health check timeout reached after $MAX_WAIT seconds. ${APP_NAME} is not responding. Update failed. Check container logs with: docker logs -f ${APP_NAME}"
 fi
 
-# -- Phase 7: Persist new version if override was used and update succeeded --
+# -- Phase 7: Persist new version if it changed and update succeeded --
 
-if [ -n "$NEW_VERSION_ARG" ] && [ "$APP_VERSION" != "$CURRENT_APP_VERSION" ]; then
+if [ "$APP_VERSION" != "$CURRENT_APP_VERSION" ]; then
     log_info "Persisting new version $APP_VERSION to /opt/laymatched/.env..."
     # Use sed to replace only the APP_VERSION line, preserving all other secrets
     sed -i "s/^APP_VERSION=.*/APP_VERSION=${APP_VERSION}/" /opt/laymatched/.env

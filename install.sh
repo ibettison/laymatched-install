@@ -68,14 +68,39 @@ generate_secret() {
 
 AUTH_API_URL="https://api.laymatched.com/installer/authorize"
 
+# Validate version string: alphanumeric, dots, dashes, underscores only
+validate_version() {
+    local version="$1"
+    case "$version" in
+        *[![:alnum:]._-]*) return 1 ;;
+        "") return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# Validate registry URL: must be a valid hostname (no scheme, no path)
+validate_registry_url() {
+    local url="$1"
+    # Allow hostname:port or just hostname
+    case "$url" in
+        *[![:alnum:].:-]*) return 1 ;;
+        "") return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 call_auth_api() {
     local installer_token="$1"
     log_info "Contacting LayMatched authorization service..."
 
+    # Build JSON safely using python3 to avoid injection issues
+    local json_payload
+    json_payload=$(python3 -c "import json, sys; print(json.dumps({'installer_token': sys.argv[1])})" "$installer_token")
+
     local response
     if ! response=$(curl -fsS -X POST \
         -H "Content-Type: application/json" \
-        -d "{\"installer_token\": \"${installer_token}\"}" \
+        -d "$json_payload" \
         "${AUTH_API_URL}" 2>/dev/null); then
         log_error "Failed to contact LayMatched authorization service. Check network connectivity and try again."
     fi
@@ -87,6 +112,14 @@ call_auth_api() {
 
     if [ -z "${REGISTRY_TOKEN}" ] || [ -z "${APPROVED_VERSION}" ] || [ -z "${REGISTRY_URL}" ]; then
         log_error "Invalid response from authorization service. Token may be invalid or expired."
+    fi
+
+    # Validate approved_version and registry_url before use
+    if ! validate_version "${APPROVED_VERSION}"; then
+        log_error "Invalid approved_version from authorization service: ${APPROVED_VERSION}"
+    fi
+    if ! validate_registry_url "${REGISTRY_URL}"; then
+        log_error "Invalid registry_url from authorization service: ${REGISTRY_URL}"
     fi
 
     log_info "Authorization successful. Approved version: ${APPROVED_VERSION}"
@@ -327,7 +360,7 @@ EOF
 else
     # On rerun: Load existing APP_VERSION and re-authenticate via Auth API
     log_info "Existing installation detected - re-authorizing for image pull."
-    APP_VERSION=$(grep '^APP_VERSION=' /opt/laymatched/.env | cut -d'=' -f2-)
+    ORIGINAL_APP_VERSION=$(grep '^APP_VERSION=' /opt/laymatched/.env | cut -d'=' -f2-)
     set +o history
     read -r -p "Enter your LayMatched Installer Token: " -s INSTALLER_TOKEN
     echo
@@ -561,6 +594,13 @@ if [ "$HEALTHY" = "true" ]; then
     log_info "Health checks passed."
 else
     log_error "Health check timeout reached after $MAX_WAIT seconds. LayMatched Web is not responding. Check container logs with: docker logs -f laymatched-web"
+fi
+
+# -- Persist version if it changed (rerun with newer approved release) --------
+if [ -n "${ORIGINAL_APP_VERSION:-}" ] && [ "$APP_VERSION" != "$ORIGINAL_APP_VERSION" ]; then
+    log_info "Persisting updated version $APP_VERSION to /opt/laymatched/.env..."
+    sed -i "s/^APP_VERSION=.*/APP_VERSION=${APP_VERSION}/" /opt/laymatched/.env
+    log_info "Version updated in configuration."
 fi
 
 # -- Phase 9: Status/instructions ----------------------------------------
