@@ -210,7 +210,7 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
 
     # Prompt for LayMatched login credentials (matches backend/scripts/create_credentials.py)
     # Collect Login ID in outer scope
-    local login_id=""
+    login_id=""
     while [ -z "$login_id" ]; do
         read -r -p "Enter LayMatched Login ID: " login_id
         if [ -z "$login_id" ]; then
@@ -220,8 +220,8 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     AUTH_USERNAME=$login_id
 
     # Collect password in outer scope (hidden, with confirmation)
-    local password=""
-    local password_confirm=""
+    password=""
+    password_confirm=""
     while true; do
         set +o history
         read -r -p "Enter LayMatched password (min 12 chars): " -s password
