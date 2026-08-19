@@ -64,6 +64,8 @@ generate_secret() {
 
 # -- Generate PBKDF2 password hash matching backend/scripts/create_credentials.py ---
 # Takes password as argument, outputs: pbkdf2_sha256$$600000$$<urlsafe_b64_salt>$$<urlsafe_b64_digest>
+# NOTE: Outputs DOUBLE dollar ($$) for Docker Compose .env interpolation.
+# Docker Compose resolves $$ -> $ in .env files, so container receives correct single $ hash.
 
 generate_password_hash() {
     local password="$1"
@@ -79,6 +81,7 @@ iterations = 600000
 dk = hashlib.pbkdf2_hmac("sha256", password, salt, iterations, dklen=32)
 salt_b64 = base64.urlsafe_b64encode(salt).decode().rstrip("=")
 dk_b64 = base64.urlsafe_b64encode(dk).decode().rstrip("=")
+# Use $$ in f-string (followed by {) to output $$ (double dollar) for Docker Compose .env escaping
 print(f"pbkdf2_sha256$${iterations}$${salt_b64}$${dk_b64}")
 ' "$password"
     else
@@ -470,8 +473,11 @@ log_info "update.sh copied to /opt/laymatched/"
 
 log_info "Phase 7: Pulling approved LayMatched release and starting services..."
 
-docker compose -f /opt/laymatched/docker-compose.yml pull
-docker compose -f /opt/laymatched/docker-compose.yml up -d
+# Run docker compose from /opt/laymatched so it loads the .env file
+cd /opt/laymatched
+docker compose pull
+docker compose up -d
+cd - > /dev/null
 
 log_info "Services started."
 

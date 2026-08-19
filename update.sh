@@ -61,13 +61,16 @@ log_info "Authentication to GHCR complete."
 
 log_info "Phase 2: Pulling latest LayMatched release (${APP_VERSION})..."
 
-docker compose -f /opt/laymatched/docker-compose.yml pull
+# Run docker compose from /opt/laymatched so it loads the .env file
+cd /opt/laymatched
+docker compose pull
 
 # -- Phase 3: Restart services -------------------------------------------
 
 log_info "Phase 3: Restarting services..."
 
-docker compose -f /opt/laymatched/docker-compose.yml up -d
+docker compose up -d
+cd - > /dev/null
 
 # -- Phase 4: Health checks ----------------------------------------------
 
@@ -106,8 +109,8 @@ LAYMATCHED UPDATE COMPLETE
 
 Updated to version: ${APP_VERSION}
 
-  - Pulled latest image: docker compose -f /opt/laymatched/docker-compose.yml pull
-  - Restarted services: docker compose -f /opt/laymatched/docker-compose.yml up -d
+  - Pulled latest image: docker compose pull
+  - Restarted services: docker compose up -d
 
 Logs and status:
   - View logs:       docker logs -f laymatched-web
