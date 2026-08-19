@@ -62,43 +62,14 @@ generate_secret() {
     fi
 }
 
-# -- Generate auth credentials matching backend/scripts/create_credentials.py ---
-# Prompts for login ID and password, returns AUTH_USERNAME and AUTH_PASSWORD_HASH
-# AUTH_PASSWORD_HASH format: pbkdf2_sha256$$600000$$<urlsafe_b64_salt>$$<urlsafe_b64_digest>
+# -- Generate PBKDF2 password hash matching backend/scripts/create_credentials.py ---
+# Takes password as argument, outputs: pbkdf2_sha256$$600000$$<urlsafe_b64_salt>$$<urlsafe_b64_digest>
 
-generate_auth_credentials() {
-    # Prompt for Login ID
-    local login_id=""
-    while [ -z "$login_id" ]; do
-        read -r -p "Enter LayMatched Login ID: " login_id
-        if [ -z "$login_id" ]; then
-            log_error "Login ID cannot be empty."
-        fi
-    done
-
-    # Prompt for password (hidden)
-    local password=""
-    local password_confirm=""
-    while true; do
-        set +o history
-        read -r -p "Enter LayMatched password (min 12 chars): " -s password
-        echo
-        read -r -p "Confirm LayMatched password: " -s password_confirm
-        echo
-        set -o history
-
-        if [ ${#password} -lt 12 ]; then
-            log_warn "Password must be at least 12 characters."
-            continue
-        fi
-        if [ "$password" != "$password_confirm" ]; then
-            log_warn "Passwords do not match."
-            continue
-        fi
-        break
-    done
-
-    # Generate PBKDF2 hash matching authoritative generator exactly
+generate_password_hash() {
+    local password="$1"
+    if [ -z "$password" ]; then
+        log_error "Password cannot be empty."
+    fi
     if command -v python3 > /dev/null 2>&1; then
         python3 -c '
 import hashlib, base64, secrets, sys
@@ -238,9 +209,40 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     fi
 
     # Prompt for LayMatched login credentials (matches backend/scripts/create_credentials.py)
-    # Returns: pbkdf2_sha256$$600000$$<salt>$$<digest>
+    # Collect Login ID in outer scope
+    local login_id=""
+    while [ -z "$login_id" ]; do
+        read -r -p "Enter LayMatched Login ID: " login_id
+        if [ -z "$login_id" ]; then
+            log_error "Login ID cannot be empty."
+        fi
+    done
     AUTH_USERNAME=$login_id
-    AUTH_PASSWORD_HASH=$(generate_auth_credentials)
+
+    # Collect password in outer scope (hidden, with confirmation)
+    local password=""
+    local password_confirm=""
+    while true; do
+        set +o history
+        read -r -p "Enter LayMatched password (min 12 chars): " -s password
+        echo
+        read -r -p "Confirm LayMatched password: " -s password_confirm
+        echo
+        set -o history
+
+        if [ ${#password} -lt 12 ]; then
+            log_warn "Password must be at least 12 characters."
+            continue
+        fi
+        if [ "$password" != "$password_confirm" ]; then
+            log_warn "Passwords do not match."
+            continue
+        fi
+        break
+    done
+
+    # Generate hash using pure helper
+    AUTH_PASSWORD_HASH=$(generate_password_hash "$password")
 
     # Prompt for application version/tag
     read -r -p "Enter the LayMatched release version/tag (e.g., latest, v1.2.3): " APP_VERSION
