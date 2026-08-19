@@ -133,11 +133,17 @@ fi
 # Call Auth API to get registry credentials and approved version
 call_auth_api "$INSTALLER_TOKEN"
 
-# If no version override, use the approved version from API
-if [ -z "$NEW_VERSION_ARG" ]; then
-    APP_VERSION="${APPROVED_VERSION}"
-    log_info "Using approved version from authorization service: ${APP_VERSION}"
+# Determine candidate version: override if provided, else approved from API
+if [ -n "$NEW_VERSION_ARG" ]; then
+    CANDIDATE_VERSION="$NEW_VERSION_ARG"
+    log_info "Version override specified: $CANDIDATE_VERSION (current: $CURRENT_APP_VERSION)"
+else
+    CANDIDATE_VERSION="${APPROVED_VERSION}"
+    log_info "Using approved version from authorization service: ${CANDIDATE_VERSION}"
 fi
+
+# Candidate registry URL from Auth API
+CANDIDATE_REGISTRY_URL="${REGISTRY_URL}"
 
 # -- Phase 2: Authenticate to LayMatched Registry -------------------------
 
@@ -150,24 +156,35 @@ fi
 
 log_info "Authentication to LayMatched Registry complete."
 
-# -- Phase 3: Pull latest LayMatched images ------------------------------
+# -- Phase 3: Create temporary .env with candidate version/registry --------
+# This ensures docker compose pull/up uses the candidate release for deployment
 
-log_info "Phase 3: Pulling LayMatched release (${APP_VERSION})..."
+log_info "Phase 3: Preparing candidate deployment environment..."
 
-# Run docker compose from /opt/laymatched so it loads the .env file
+# Create candidate .env by copying persistent .env and updating candidate values
 cd /opt/laymatched
-docker compose pull
+cp .env .env.candidate
+# Update candidate APP_VERSION and REGISTRY_URL
+sed -i "s/^APP_VERSION=.*/APP_VERSION=${CANDIDATE_VERSION}/" .env.candidate
+sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" .env.candidate
 
-# -- Phase 4: Restart services -------------------------------------------
+# -- Phase 4: Pull candidate LayMatched images -----------------------------
 
-log_info "Phase 4: Restarting services..."
+log_info "Phase 4: Pulling candidate LayMatched release (${CANDIDATE_VERSION})..."
 
-docker compose up -d
+# Use candidate .env for Compose variable interpolation
+docker compose --env-file .env.candidate pull
+
+# -- Phase 5: Restart services with candidate version ----------------------
+
+log_info "Phase 5: Restarting services with candidate release..."
+
+docker compose --env-file .env.candidate up -d
 cd - > /dev/null
 
-# -- Phase 5: Health checks ----------------------------------------------
+# -- Phase 6: Health checks ----------------------------------------------
 
-log_info "Phase 5: Running health checks..."
+log_info "Phase 6: Running health checks on candidate release..."
 
 MAX_WAIT=120
 ELAPSED=0
@@ -186,19 +203,34 @@ while [ $ELAPSED -lt $MAX_WAIT ]; do
     fi
 done
 
-# -- Phase 6: Status - fail clearly if unhealthy -------------------------
+# -- Phase 7: Status - fail clearly if unhealthy -------------------------
 
 if [ $ELAPSED -ge $MAX_WAIT ]; then
+    # Clean up candidate env on failure
+    rm -f /opt/laymatched/.env.candidate
     log_error "Health check timeout reached after $MAX_WAIT seconds. ${APP_NAME} is not responding. Update failed. Check container logs with: docker logs -f ${APP_NAME}"
 fi
 
-# -- Phase 7: Regenerate docker-compose.yml with new version/registry ----
-# This ensures Compose resolves the new image reference from updated .env
+# -- Phase 8: Candidate healthy - persist new version and regenerate Compose --
 
-log_info "Phase 7: Regenerating docker-compose.yml with updated configuration..."
+log_info "Phase 8: Candidate healthy. Persisting new version and regenerating configuration..."
 
 cd /opt/laymatched
 
+# Persist candidate values to persistent .env
+if [ "$CANDIDATE_VERSION" != "$CURRENT_APP_VERSION" ]; then
+    log_info "Persisting new version $CANDIDATE_VERSION to /opt/laymatched/.env..."
+    sed -i "s/^APP_VERSION=.*/APP_VERSION=${CANDIDATE_VERSION}/" .env
+    log_info "Version updated in configuration."
+fi
+
+CURRENT_REGISTRY_URL=$(grep '^REGISTRY_URL=' /opt/laymatched/.env | cut -d'=' -f2-)
+if [ "$CANDIDATE_REGISTRY_URL" != "$CURRENT_REGISTRY_URL" ]; then
+    log_info "Updating registry URL in /opt/laymatched/.env..."
+    sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" .env
+fi
+
+# Regenerate docker-compose.yml with updated configuration (uses persistent .env)
 cat > /opt/laymatched/docker-compose.yml <<'COMPOSE_EOF'
 version: '3.8'
 
@@ -277,27 +309,14 @@ networks:
     driver: bridge
 COMPOSE_EOF
 
+# Clean up candidate env file
+rm -f .env.candidate
+
 cd - > /dev/null
 
 log_info "docker-compose.yml regenerated with updated version and registry."
 
-# -- Phase 8: Update .env with new version and registry URL if changed ----
-
-# Update REGISTRY_URL in .env if it changed (e.g., registry migration)
-CURRENT_REGISTRY_URL=$(grep '^REGISTRY_URL=' /opt/laymatched/.env | cut -d'=' -f2-)
-if [ "$REGISTRY_URL" != "$CURRENT_REGISTRY_URL" ]; then
-    log_info "Updating registry URL in /opt/laymatched/.env..."
-    sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${REGISTRY_URL}|" /opt/laymatched/.env
-fi
-
-if [ "$APP_VERSION" != "$CURRENT_APP_VERSION" ]; then
-    log_info "Persisting new version $APP_VERSION to /opt/laymatched/.env..."
-    # Use sed to replace only the APP_VERSION line, preserving all other secrets
-    sed -i "s/^APP_VERSION=.*/APP_VERSION=${APP_VERSION}/" /opt/laymatched/.env
-    log_info "Version updated in configuration."
-fi
-
-# -- Phase 8: Status ----------------------------------------------------
+# -- Phase 9: Status ----------------------------------------------------
 
 cat <<UPDATE_EOF
 
@@ -305,10 +324,12 @@ cat <<UPDATE_EOF
 LAYMATCHED UPDATE COMPLETE
 ================================================================================
 
-Updated to version: ${APP_VERSION}
+Updated to version: ${CANDIDATE_VERSION}
 
-  - Pulled latest image: docker compose pull
-  - Restarted services: docker compose up -d
+  - Pulled candidate image: docker compose --env-file .env.candidate pull
+  - Restarted services: docker compose --env-file .env.candidate up -d
+  - Health checks passed on candidate release
+  - Persisted version and regenerated docker-compose.yml
 
 Logs and status:
   - View logs:       docker logs -f laymatched-web

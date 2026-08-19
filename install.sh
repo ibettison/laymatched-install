@@ -362,6 +362,7 @@ else
     # On rerun: Load existing APP_VERSION and re-authenticate via Auth API
     log_info "Existing installation detected - re-authorizing for image pull."
     ORIGINAL_APP_VERSION=$(grep '^APP_VERSION=' /opt/laymatched/.env | cut -d'=' -f2-)
+    ORIGINAL_REGISTRY_URL=$(grep '^REGISTRY_URL=' /opt/laymatched/.env | cut -d'=' -f2-)
     set +o history
     read -r -p "Enter your LayMatched Installer Token: " -s INSTALLER_TOKEN
     echo
@@ -372,8 +373,8 @@ else
     call_auth_api "$INSTALLER_TOKEN"
     # Use the approved version from API (could differ from stored if new release approved)
     APP_VERSION="${APPROVED_VERSION}"
-    # Update REGISTRY_URL in .env if it changed (e.g., registry migration)
-    sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${REGISTRY_URL}|" /opt/laymatched/.env
+    # Candidate registry URL - will be persisted only after health checks pass
+    CANDIDATE_REGISTRY_URL="${REGISTRY_URL}"
     log_info "Using existing configuration from /opt/laymatched/.env. Approved version: ${APP_VERSION}"
 fi
 
@@ -604,6 +605,13 @@ if [ -n "${ORIGINAL_APP_VERSION:-}" ] && [ "$APP_VERSION" != "$ORIGINAL_APP_VERS
     log_info "Persisting updated version $APP_VERSION to /opt/laymatched/.env..."
     sed -i "s/^APP_VERSION=.*/APP_VERSION=${APP_VERSION}/" /opt/laymatched/.env
     log_info "Version updated in configuration."
+fi
+
+# -- Persist registry URL if it changed (rerun with registry migration) -------
+if [ -n "${ORIGINAL_REGISTRY_URL:-}" ] && [ "${CANDIDATE_REGISTRY_URL}" != "${ORIGINAL_REGISTRY_URL}" ]; then
+    log_info "Persisting updated registry URL ${CANDIDATE_REGISTRY_URL} to /opt/laymatched/.env..."
+    sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" /opt/laymatched/.env
+    log_info "Registry URL updated in configuration."
 fi
 
 # -- Phase 9: Status/instructions ----------------------------------------
