@@ -345,6 +345,7 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     # Installer Token and Registry Token are NOT persisted - only used for initial auth/pull
     cat > /opt/laymatched/.env <<EOF
 APP_VERSION=${APP_VERSION}
+REGISTRY_URL=${REGISTRY_URL}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 AUTH_USERNAME=${AUTH_USERNAME}
 AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
@@ -371,6 +372,8 @@ else
     call_auth_api "$INSTALLER_TOKEN"
     # Use the approved version from API (could differ from stored if new release approved)
     APP_VERSION="${APPROVED_VERSION}"
+    # Update REGISTRY_URL in .env if it changed (e.g., registry migration)
+    sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${REGISTRY_URL}|" /opt/laymatched/.env
     log_info "Using existing configuration from /opt/laymatched/.env. Approved version: ${APP_VERSION}"
 fi
 
@@ -389,7 +392,7 @@ log_info "Authentication to LayMatched Registry complete."
 
 log_info "Phase 6: Generating docker-compose.yml..."
 
-cat > /opt/laymatched/docker-compose.yml <<COMPOSE_EOF
+cat > /opt/laymatched/docker-compose.yml <<'COMPOSE_EOF'
 version: '3.8'
 
 services:

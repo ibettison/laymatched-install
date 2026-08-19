@@ -192,7 +192,103 @@ if [ $ELAPSED -ge $MAX_WAIT ]; then
     log_error "Health check timeout reached after $MAX_WAIT seconds. ${APP_NAME} is not responding. Update failed. Check container logs with: docker logs -f ${APP_NAME}"
 fi
 
-# -- Phase 7: Persist new version if it changed and update succeeded --
+# -- Phase 7: Regenerate docker-compose.yml with new version/registry ----
+# This ensures Compose resolves the new image reference from updated .env
+
+log_info "Phase 7: Regenerating docker-compose.yml with updated configuration..."
+
+cd /opt/laymatched
+
+cat > /opt/laymatched/docker-compose.yml <<'COMPOSE_EOF'
+version: '3.8'
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: laymatched-db
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=laymatched_betting
+      - POSTGRES_USER=laymatched
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U laymatched -d laymatched_betting"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - laymatched_net
+
+  api:
+    image: ${REGISTRY_URL}/laymatched-api:${APP_VERSION}
+    container_name: laymatched-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - bookmaker_icon_cache:/var/lib/laymatchedbetting/bookmaker-icons
+    environment:
+      - DATABASE_URL=postgresql+psycopg://laymatched:${POSTGRES_PASSWORD}@db:5432/laymatched_betting
+      - AUTH_USERNAME=${AUTH_USERNAME}
+      - AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
+      - AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
+      - AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
+      - COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY}
+      - COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - laymatched_net
+
+  web:
+    image: ${REGISTRY_URL}/laymatched-web:${APP_VERSION}
+    container_name: laymatched-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      - API_URL=http://api:8000
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/app/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - laymatched_net
+
+volumes:
+  postgres_data:
+  bookmaker_icon_cache:
+
+networks:
+  laymatched_net:
+    driver: bridge
+COMPOSE_EOF
+
+cd - > /dev/null
+
+log_info "docker-compose.yml regenerated with updated version and registry."
+
+# -- Phase 8: Update .env with new version and registry URL if changed ----
+
+# Update REGISTRY_URL in .env if it changed (e.g., registry migration)
+CURRENT_REGISTRY_URL=$(grep '^REGISTRY_URL=' /opt/laymatched/.env | cut -d'=' -f2-)
+if [ "$REGISTRY_URL" != "$CURRENT_REGISTRY_URL" ]; then
+    log_info "Updating registry URL in /opt/laymatched/.env..."
+    sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${REGISTRY_URL}|" /opt/laymatched/.env
+fi
 
 if [ "$APP_VERSION" != "$CURRENT_APP_VERSION" ]; then
     log_info "Persisting new version $APP_VERSION to /opt/laymatched/.env..."
