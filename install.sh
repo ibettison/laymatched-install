@@ -64,7 +64,7 @@ generate_secret() {
 
 # -- Generate auth credentials matching backend/scripts/create_credentials.py ---
 # Prompts for login ID and password, returns AUTH_USERNAME and AUTH_PASSWORD_HASH
-# Format: pbkdf2_sha256$$600000$$<urlsafe_b64_salt>$$<urlsafe_b64_digest>
+# AUTH_PASSWORD_HASH format: pbkdf2_sha256$$600000$$<urlsafe_b64_salt>$$<urlsafe_b64_digest>
 
 generate_auth_credentials() {
     # Prompt for Login ID
@@ -100,17 +100,16 @@ generate_auth_credentials() {
 
     # Generate PBKDF2 hash matching authoritative generator exactly
     if command -v python3 > /dev/null 2>&1; then
-        python3 -c "
+        python3 -c '
 import hashlib, base64, secrets, sys
-username = sys.argv[1]
-password = sys.argv[2].encode()
+password = sys.argv[1].encode()
 salt = secrets.token_bytes(18)
 iterations = 600000
-dk = hashlib.pbkdf2_hmac('sha256', password, salt, iterations, dklen=32)
-salt_b64 = base64.urlsafe_b64encode(salt).decode().rstrip('=')
-dk_b64 = base64.urlsafe_b64encode(dk).decode().rstrip('=')
-print(f'{username}$${iterations}$${salt_b64}$${dk_b64}')
-" "$login_id" "$password"
+dk = hashlib.pbkdf2_hmac("sha256", password, salt, iterations, dklen=32)
+salt_b64 = base64.urlsafe_b64encode(salt).decode().rstrip("=")
+dk_b64 = base64.urlsafe_b64encode(dk).decode().rstrip("=")
+print(f"pbkdf2_sha256$${iterations}$${salt_b64}$${dk_b64}")
+' "$password"
     else
         log_error "Python3 is required to generate password hash."
     fi
@@ -239,10 +238,9 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     fi
 
     # Prompt for LayMatched login credentials (matches backend/scripts/create_credentials.py)
-    # Returns: AUTH_USERNAME$$600000$$<salt>$$<digest>
-    AUTH_CREDENTIALS=$(generate_auth_credentials)
-    AUTH_USERNAME=$(echo "$AUTH_CREDENTIALS" | cut -d'$' -f1)
-    AUTH_PASSWORD_HASH=$(echo "$AUTH_CREDENTIALS" | cut -d'$' -f2-)
+    # Returns: pbkdf2_sha256$$600000$$<salt>$$<digest>
+    AUTH_USERNAME=$login_id
+    AUTH_PASSWORD_HASH=$(generate_auth_credentials)
 
     # Prompt for application version/tag
     read -r -p "Enter the LayMatched release version/tag (e.g., latest, v1.2.3): " APP_VERSION
