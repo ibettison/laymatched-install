@@ -185,6 +185,11 @@ if ! docker compose version > /dev/null 2>&1; then
     apt-get update
     if apt-get install -y docker-compose-plugin; then
         log_info "Docker Compose plugin installed successfully."
+        # Re-verify after installation
+        if ! docker compose version > /dev/null 2>&1; then
+            log_error "Docker Compose plugin installed but 'docker compose version' still fails. Compose is not usable."
+        fi
+        log_info "Docker Compose plugin verified: $(docker compose version --short)"
     else
         log_error "Failed to install Docker Compose plugin. Please install it manually: apt-get install docker-compose-plugin"
     fi

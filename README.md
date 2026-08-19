@@ -10,9 +10,16 @@ The installer has been tested on AWS with clean Ubuntu 24.04 installations. It i
 
 ## Supported Platforms
 
+The installer **validates and supports** these Ubuntu LTS releases:
+
 - **Ubuntu 20.04 LTS (Focal)**
 - **Ubuntu 22.04 LTS (Jammy)**
 - **Ubuntu 24.04 LTS (Noble)**
+
+**AWS acceptance testing** has been completed on:
+- **Ubuntu 24.04 LTS (Noble)** — fully tested in clean AWS environment
+
+Ubuntu 20.04 and 22.04 are supported by the installer's validation logic and package dependencies but have not yet been through the full AWS acceptance test cycle.
 
 Non-Ubuntu systems are explicitly rejected.
 
