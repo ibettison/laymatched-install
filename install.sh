@@ -274,6 +274,15 @@ EOF
 
     log_info "Configuration stored in /opt/laymatched/.env (permissions 600). Secrets generated independently of GHCR token."
 else
+    # On rerun: GHCR_TOKEN not in .env, must prompt for docker login
+    log_info "Existing installation detected - GHCR token required for image pull."
+    set +o history
+    read -r -p "Enter your GitHub Container Registry (GHCR) authentication token: " -s GHCR_TOKEN
+    echo
+    set -o history
+    if [ -z "$GHCR_TOKEN" ]; then
+        log_error "GHCR token is required."
+    fi
     log_info "Using existing configuration from /opt/laymatched/.env."
 fi
 
@@ -372,6 +381,12 @@ COMPOSE_EOF
 
 log_info "docker-compose.yml generated."
 
+# Copy update.sh to installation directory for future updates
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cp "${SCRIPT_DIR}/update.sh" /opt/laymatched/update.sh
+chmod +x /opt/laymatched/update.sh
+log_info "update.sh copied to /opt/laymatched/"
+
 # -- Phase 7: Pull and start services -------------------------------------
 
 log_info "Phase 7: Pulling approved LayMatched release and starting services..."
@@ -447,6 +462,6 @@ Update instructions:
   - sudo ./update.sh
 
 ================================================================================
+INSTALL_EOF
 
 log_info "LayMatched installer finished successfully."
-INSTALL_EOF
