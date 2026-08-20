@@ -496,32 +496,47 @@ func generateToken(prefix string) (string, error) {
 	return prefix + base64.RawURLEncoding.EncodeToString(entropy), nil
 }
 
+// parseScopePairs parses Docker Distribution scope strings into (resourceName,
+// action) pairs. Handles both the single-resource form
+// "repository:repo:action1,action2" (comma-separated actions for one resource)
+// and the multi-resource form "repository:repo1:action,repository:repo2:action".
+func parseScopePairs(scope string) [][2]string {
+	var pairs [][2]string
+	currentRepo := ""
+	for _, part := range strings.Split(scope, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		segments := strings.Split(part, ":")
+		if len(segments) == 3 && segments[0] == "repository" {
+			currentRepo = segments[1]
+			pairs = append(pairs, [2]string{currentRepo, segments[2]})
+		} else if len(segments) == 1 && currentRepo != "" {
+			// Additional comma-separated action for the current resource
+			pairs = append(pairs, [2]string{currentRepo, segments[0]})
+		}
+	}
+	return pairs
+}
+
 func generateRegistryToken(customerID string, scopes string, ttl time.Duration) (string, error) {
 	now := time.Now()
 
 	// Parse scopes and build Docker Distribution compatible access entries
 	// Scopes format: "repository:laymatched-api:pull,repository:laymatched-web:push"
+	// or "repository:laymatched-api:pull,push" (comma-separated actions)
 	var access []map[string]interface{}
-	for _, scope := range strings.Split(scopes, ",") {
-		scope = strings.TrimSpace(scope)
-		if scope == "" {
-			continue
-		}
-		parts := strings.Split(scope, ":")
-		if len(parts) != 3 {
-			continue
-		}
-		resourceType := parts[0] // "repository"
-		resourceName := parts[1] // "laymatched-api"
-		action := parts[2]       // "pull", "push", etc.
-
-		if resourceType == "repository" {
-			access = append(access, map[string]interface{}{
-				"type":    resourceType,
-				"name":    resourceName,
-				"actions": []string{action},
-			})
-		}
+	actionsByName := make(map[string][]string)
+	for _, pair := range parseScopePairs(scopes) {
+		actionsByName[pair[0]] = append(actionsByName[pair[0]], pair[1])
+	}
+	for name, actions := range actionsByName {
+		access = append(access, map[string]interface{}{
+			"type":    "repository",
+			"name":    name,
+			"actions": actions,
+		})
 	}
 
 	claims := jwt.MapClaims{
@@ -718,14 +733,36 @@ func tokenServiceHandler(c *gin.Context) {
 		return
 	}
 
-	if !strings.HasPrefix(authHeader, "Bearer ") {
+	// Docker Distribution clients authenticate to the token endpoint with HTTP Basic
+	// auth (the API token is the password, username is ignored). Direct callers may
+	// also present the API token as a Bearer credential. Support both.
+	var token string
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		token = strings.TrimPrefix(authHeader, "Bearer ")
+	} else if strings.HasPrefix(authHeader, "Basic ") {
+		encoded := strings.TrimPrefix(authHeader, "Basic ")
+		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			logError(c, http.StatusUnauthorized, "-", "invalid basic auth encoding")
+			c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+			return
+		}
+		parts := strings.SplitN(string(decoded), ":", 2)
+		if len(parts) != 2 || parts[1] == "" {
+			logError(c, http.StatusUnauthorized, "-", "invalid basic auth credentials")
+			c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+			return
+		}
+		token = parts[1]
+	} else {
 		logError(c, http.StatusUnauthorized, "-", "invalid authorization scheme")
 		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
 
-	token := strings.TrimPrefix(authHeader, "Bearer ")
 	tokenPrefix := redactToken(token)
 
 	tokenHash := tokenSHA256(token)
@@ -753,17 +790,12 @@ func tokenServiceHandler(c *gin.Context) {
 		if scope == "" {
 			scope = "repository:laymatched-api:pull,repository:laymatched-web:pull"
 		}
-		allowedScopes := []string{"repository:laymatched-api:pull", "repository:laymatched-web:pull"}
-		for _, s := range strings.Split(scope, ",") {
-			s = strings.TrimSpace(s)
-			allowed := false
-			for _, a := range allowedScopes {
-				if s == a {
-					allowed = true
-					break
-				}
-			}
-			if !allowed {
+		allowedMap := make(map[[2]string]bool)
+		for _, a := range parseScopePairs("repository:laymatched-api:pull,repository:laymatched-web:pull") {
+			allowedMap[a] = true
+		}
+		for _, s := range parseScopePairs(scope) {
+			if !allowedMap[s] {
 				logRequest(c, http.StatusForbidden, tokenPrefix, "scope not authorized for installer token")
 				c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
 				c.JSON(http.StatusForbidden, gin.H{"error": "scope not authorized"})
@@ -811,15 +843,12 @@ func tokenServiceHandler(c *gin.Context) {
 
 	// For owner tokens, validate requested scope against token's allowed scopes
 	if req.Scope != "" {
-		// Parse owner token scopes (comma-separated)
-		allowedScopeMap := make(map[string]bool)
-		for _, s := range strings.Split(t.Scopes, ",") {
-			allowedScopeMap[strings.TrimSpace(s)] = true
+		allowedMap := make(map[[2]string]bool)
+		for _, a := range parseScopePairs(t.Scopes) {
+			allowedMap[a] = true
 		}
-		// Check each requested scope
-		for _, s := range strings.Split(req.Scope, ",") {
-			s = strings.TrimSpace(s)
-			if !allowedScopeMap[s] {
+		for _, s := range parseScopePairs(req.Scope) {
+			if !allowedMap[s] {
 				logRequest(c, http.StatusForbidden, tokenPrefix, "scope not authorized")
 				c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
 				c.JSON(http.StatusForbidden, gin.H{"error": "scope not authorized"})
