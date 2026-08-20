@@ -17,9 +17,9 @@ on:
         default: 'registry.laymatched.io'
         type: string
       app_repo:
-        description: 'Source application repository (owner/name)'
+        description: 'GHCR namespace (owner) where application images are published (e.g., ibettison)'
         required: false
-        default: 'ibettison/laymatched'
+        default: 'ibettison'
         type: string
       update_approved_version:
         description: 'Update approved version on VPS after successful publish'
@@ -61,6 +61,35 @@ jobs:
           else
             echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
           fi
+
+      - name: Validate source image coordinates
+        run: |
+          set -euo pipefail
+          app_repo="${{ inputs.app_repo }}"
+          # The LayMatched application release process publishes user-level GHCR
+          # packages (verified against ibettison/layMatchedBetting runs):
+          #   ghcr.io/ibettison/laymatched-api
+          #   ghcr.io/ibettison/laymatched-web
+          # GHCR normalizes names to lowercase, so the namespace must be a
+          # single-segment owner (no repo sub-path).
+          ns="${app_repo,,}"
+          case "${ns}" in
+            */*) echo "app_repo must be a single-segment GHCR namespace (owner), got: ${app_repo}"; exit 1 ;;
+            *) ;;
+          esac
+          api_ref="ghcr.io/${ns}/laymatched-api"
+          web_ref="ghcr.io/${ns}/laymatched-web"
+          echo "Resolved API image: ${api_ref}"
+          echo "Resolved Web image: ${web_ref}"
+          echo "api_image=${api_ref}" >> $GITHUB_OUTPUT
+          echo "web_image=${web_ref}" >> $GITHUB_OUTPUT
+          if [ "${app_repo}" == "ibettison" ]; then
+            [ "${api_ref}" == "ghcr.io/ibettison/laymatched-api" ] \
+              || { echo "Default API coordinate mismatch: ${api_ref}"; exit 1; }
+            [ "${web_ref}" == "ghcr.io/ibettison/laymatched-web" ] \
+              || { echo "Default Web coordinate mismatch: ${web_ref}"; exit 1; }
+          fi
+          echo "Source coordinates validated"
 
       - name: Verify source API image exists
         run: |
@@ -178,7 +207,7 @@ jobs:
           echo "| laymatched-web | ${{ inputs.version }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Registry: ${{ inputs.registry_url }}" >> $GITHUB_STEP_SUMMARY
-          echo "Source Repo: ${{ inputs.app_repo }}" >> $GITHUB_STEP_SUMMARY
+          echo "Source GHCR namespace: ${{ inputs.app_repo }}" >> $GITHUB_STEP_SUMMARY
           echo "SHA: ${{ steps.sha.outputs.sha }}" >> $GITHUB_STEP_SUMMARY
 
   notify:
