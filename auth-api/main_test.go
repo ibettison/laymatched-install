@@ -5,11 +5,14 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -108,18 +111,16 @@ func TestAuthorizeValidToken(t *testing.T) {
 	cfg = Config{
 		Port:            "8443",
 		DBPath:          "",
-		ApprovedVersion: "v0.1.0",
 		RegistryURL:     "registry.laymatched.io",
 		RateLimitPerMin: 1000,
 	}
-	// Set global db for handlers
 	db = testDB
+	approvedVersion = loadApprovedVersion()
 
 	token := "lm_inst_validtoken123456789012"
 	insertTestToken(t, testDB, "customer-1", token, false, false)
 
 	router := setupRouter()
-	router.GET("/test-db", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("POST", "/installer/authorize", bytes.NewBufferString(`{"installer_token":"`+token+`"}`))
@@ -141,12 +142,58 @@ func TestAuthorizeValidToken(t *testing.T) {
 	if resp.RegistryURL != "registry.laymatched.io" {
 		t.Errorf("Expected registry.laymatched.io, got %s", resp.RegistryURL)
 	}
-	if resp.RegistryToken == "" {
+	// registry_token should be the installer token itself (for use with /token endpoint)
+	if resp.RegistryToken != token {
+		t.Errorf("Expected registry_token to be installer token, got %s", resp.RegistryToken)
+	}
+}
+
+func TestTokenServiceWithInstallerToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	testDB, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	priv, pub := generateTestKeys(t)
+	privateKey = priv
+	publicKey = pub
+
+	cfg = Config{
+		RegistryURL:     "registry.laymatched.io",
+		RateLimitPerMin: 1000,
+	}
+	db = testDB
+	approvedVersion = loadApprovedVersion()
+
+	token := "lm_inst_tokensvctoken12345678"
+	insertTestToken(t, testDB, "customer-1", token, false, false)
+
+	router := setupRouter()
+
+	// Call token service with installer token
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/token?service=registry.laymatched.io&scope=repository:laymatched-api:pull", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp TokenServiceResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Invalid JSON: %v", err)
+	}
+
+	if resp.Token == "" {
 		t.Error("Expected non-empty registry token")
+	}
+	if resp.ExpiresIn != int(registryTokenTTL.Seconds()) {
+		t.Errorf("Expected expires_in %d, got %d", int(registryTokenTTL.Seconds()), resp.ExpiresIn)
 	}
 
 	// Verify JWT structure
-	parsed, err := jwt.Parse(resp.RegistryToken, func(t *jwt.Token) (interface{}, error) {
+	parsed, err := jwt.Parse(resp.Token, func(t *jwt.Token) (interface{}, error) {
 		return pub, nil
 	})
 	if err != nil {
@@ -163,7 +210,7 @@ func TestAuthorizeValidToken(t *testing.T) {
 		t.Errorf("Wrong subject: %v", claims["sub"])
 	}
 	scope := claims["scope"].(string)
-	if scope != "repository:laymatched-api:pull,repository:laymatched-web:pull" {
+	if scope != "repository:laymatched-api:pull" {
 		t.Errorf("Wrong scope: %s", scope)
 	}
 	if claims["customer_id"] != "customer-1" {
@@ -182,10 +229,10 @@ func TestAuthorizeUnknownToken(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		ApprovedVersion: "v0.1.0",
 		RegistryURL:     "registry.laymatched.io",
 		RateLimitPerMin: 1000,
 	}
+	approvedVersion = loadApprovedVersion()
 
 	router := setupRouter()
 
@@ -216,10 +263,10 @@ func TestAuthorizeRevokedToken(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		ApprovedVersion: "v0.1.0",
 		RegistryURL:     "registry.laymatched.io",
 		RateLimitPerMin: 1000,
 	}
+	approvedVersion = loadApprovedVersion()
 
 	token := "lm_inst_revokedtoken1234567890"
 	insertTestToken(t, testDB, "customer-1", token, true, false)
@@ -247,10 +294,10 @@ func TestAuthorizeExpiredToken(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		ApprovedVersion: "v0.1.0",
 		RegistryURL:     "registry.laymatched.io",
 		RateLimitPerMin: 1000,
 	}
+	approvedVersion = loadApprovedVersion()
 
 	token := "lm_inst_expiredtoken12345678901"
 	insertTestToken(t, testDB, "customer-1", token, false, true)
@@ -274,10 +321,10 @@ func TestAuthorizeMalformedRequest(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		ApprovedVersion: "v0.1.0",
 		RegistryURL:     "registry.laymatched.io",
 		RateLimitPerMin: 1000,
 	}
+	approvedVersion = loadApprovedVersion()
 
 	router := setupRouter()
 
@@ -298,10 +345,10 @@ func TestHealthEndpoint(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		ApprovedVersion: "v0.1.0",
 		RegistryURL:     "registry.laymatched.io",
 		RateLimitPerMin: 1000,
 	}
+	approvedVersion = loadApprovedVersion()
 
 	router := setupRouter()
 
@@ -328,10 +375,10 @@ func TestJWKSEndpoint(t *testing.T) {
 	publicKey = pub
 
 	cfg = Config{
-		ApprovedVersion: "v0.1.0",
 		RegistryURL:     "registry.laymatched.io",
 		RateLimitPerMin: 1000,
 	}
+	approvedVersion = loadApprovedVersion()
 
 	router := setupRouter()
 
@@ -366,10 +413,10 @@ func TestTokenHashNotLogged(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		ApprovedVersion: "v0.1.0",
 		RegistryURL:     "registry.laymatched.io",
 		RateLimitPerMin: 1000,
 	}
+	approvedVersion = loadApprovedVersion()
 
 	token := "lm_inst_secrettoken12345678901"
 	insertTestToken(t, testDB, "customer-1", token, false, false)
@@ -404,25 +451,26 @@ func TestRegistryTokenTTL(t *testing.T) {
 	publicKey = pub
 
 	cfg = Config{
-		ApprovedVersion: "v0.1.0",
 		RegistryURL:     "registry.laymatched.io",
 		RateLimitPerMin: 1000,
 	}
+	approvedVersion = loadApprovedVersion()
 
 	token := "lm_inst_ttltoken12345678901234"
 	insertTestToken(t, testDB, "customer-1", token, false, false)
 
 	router := setupRouter()
 
+	// Call token service to get registry JWT
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/installer/authorize", bytes.NewBufferString(`{"installer_token":"`+token+`"}`))
-	req.Header.Set("Content-Type", "application/json")
+	req, _ := http.NewRequest("GET", "/token?service=registry.laymatched.io&scope=repository:laymatched-api:pull", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
 	router.ServeHTTP(w, req)
 
-	var resp AuthorizeResponse
+	var resp TokenServiceResponse
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
-	parsed, _ := jwt.Parse(resp.RegistryToken, func(t *jwt.Token) (interface{}, error) {
+	parsed, _ := jwt.Parse(resp.Token, func(t *jwt.Token) (interface{}, error) {
 		return pub, nil
 	})
 	claims := parsed.Claims.(jwt.MapClaims)
@@ -450,9 +498,17 @@ func TestApprovedVersionChange(t *testing.T) {
 	token := "lm_inst_versiontoken1234567890"
 	insertTestToken(t, testDB, "customer-1", token, false, false)
 
+	// Create a temp approved_version.txt file
+	tmpDir := t.TempDir()
+	versionFile := filepath.Join(tmpDir, "approved_version.txt")
+	approvedVersionPath = versionFile
+
 	// First request with v0.1.0
+	os.WriteFile(versionFile, []byte("v0.1.0"), 0644)
+	// Initialize approved version
+	approvedVersion = loadApprovedVersion()
+
 	cfg = Config{
-		ApprovedVersion: "v0.1.0",
 		RegistryURL:     "registry.laymatched.io",
 		RateLimitPerMin: 1000,
 	}
@@ -467,7 +523,9 @@ func TestApprovedVersionChange(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &resp1)
 
 	// Change approved version
-	cfg.ApprovedVersion = "v0.2.0"
+	os.WriteFile(versionFile, []byte("v0.2.0"), 0644)
+	// Manually reload approved version (file watcher not running in tests)
+	approvedVersion = loadApprovedVersion()
 
 	w = httptest.NewRecorder()
 	req, _ = http.NewRequest("POST", "/installer/authorize", bytes.NewBufferString(`{"installer_token":"`+token+`"}`))
@@ -496,10 +554,10 @@ func TestRegistryURLReturned(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		ApprovedVersion: "v0.1.0",
 		RegistryURL:     "registry.laymatched.io",
 		RateLimitPerMin: 1000,
 	}
+	approvedVersion = loadApprovedVersion()
 
 	token := "lm_inst_urltoken1234567890123"
 	insertTestToken(t, testDB, "customer-1", token, false, false)
@@ -530,16 +588,16 @@ func TestRateLimiting(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		ApprovedVersion: "v0.1.0",
 		RegistryURL:     "registry.laymatched.io",
 		RateLimitPerMin: 2,
 	}
+	approvedVersion = loadApprovedVersion()
 
 	router := setupRouter()
 
 	// Test rate limiter directly
 	rl := NewRateLimiter(2, time.Minute)
-	
+
 	// First two requests should be allowed
 	if !rl.Allow("192.168.1.100") {
 		t.Fatal("First request should be allowed")
@@ -547,12 +605,12 @@ func TestRateLimiting(t *testing.T) {
 	if !rl.Allow("192.168.1.100") {
 		t.Fatal("Second request should be allowed")
 	}
-	
+
 	// Third request should be denied
 	if rl.Allow("192.168.1.100") {
 		t.Fatal("Third request should be rate limited")
 	}
-	
+
 	// Different IP should be allowed
 	if !rl.Allow("192.168.1.101") {
 		t.Fatal("Different IP should be allowed")
@@ -561,7 +619,7 @@ func TestRateLimiting(t *testing.T) {
 	// Also test through HTTP (with rate limit disabled for this part)
 	cfg.RateLimitPerMin = 1000
 	router = setupRouter()
-	
+
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("POST", "/installer/authorize", bytes.NewBufferString(`{"installer_token":"lm_inst_ratelimit123456789012"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -574,7 +632,7 @@ func TestRateLimiting(t *testing.T) {
 func TestTokenGenerationEntropy(t *testing.T) {
 	tokens := make(map[string]bool)
 	for i := 0; i < 1000; i++ {
-		token, err := generateToken()
+		token, err := generateToken(tokenPrefix)
 		if err != nil {
 			t.Fatalf("Token generation failed: %v", err)
 		}
@@ -603,7 +661,6 @@ func TestConcurrentTokenValidation(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		ApprovedVersion: "v0.1.0",
 		RegistryURL:     "registry.laymatched.io",
 		RateLimitPerMin: 1000,
 	}
@@ -629,5 +686,77 @@ func TestConcurrentTokenValidation(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		<-done
+	}
+}
+
+func TestRegistryPublicKeyDistribution(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tmpDir := t.TempDir()
+	privatePath := filepath.Join(tmpDir, "private.pem")
+	publicPath := filepath.Join(tmpDir, "public.pem")
+	registryPublicPath := filepath.Join(tmpDir, "auth-public.pem")
+
+	cfg = Config{
+		RegistryURL:           "registry.laymatched.io",
+		RateLimitPerMin:       1000,
+		PrivateKeyPath:        privatePath,
+		PublicKeyPath:         publicPath,
+		RegistryPublicKeyPath: registryPublicPath,
+	}
+	approvedVersion = loadApprovedVersion()
+
+	// Call loadOrGenerateKeys - should write to all three paths
+	priv, pub, err := loadOrGenerateKeys(privatePath, publicPath, registryPublicPath)
+	if err != nil {
+		t.Fatalf("loadOrGenerateKeys failed: %v", err)
+	}
+	privateKey = priv
+	publicKey = pub
+
+	// Verify all three files exist
+	for _, p := range []string{privatePath, publicPath, registryPublicPath} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("Expected file %s to exist: %v", p, err)
+		}
+	}
+
+	// Verify registry public key matches the public key
+	registryPubPEM, err := os.ReadFile(registryPublicPath)
+	if err != nil {
+		t.Fatalf("Failed to read registry public key: %v", err)
+	}
+	block, _ := pem.Decode(registryPubPEM)
+	if block == nil || block.Type != "PUBLIC KEY" {
+		t.Fatalf("Invalid registry public key PEM")
+	}
+	registryPub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("Failed to parse registry public key: %v", err)
+	}
+	rsaRegistryPub, ok := registryPub.(*rsa.PublicKey)
+	if !ok {
+		t.Fatalf("Registry public key is not RSA")
+	}
+	if rsaRegistryPub.N.Cmp(pub.N) != 0 || rsaRegistryPub.E != pub.E {
+		t.Errorf("Registry public key does not match generated public key")
+	}
+
+	// Verify private key is NOT readable at registry public path (permissions)
+	// The registry public key should be world-readable (0644), private key should be 0600
+	privateInfo, err := os.Stat(privatePath)
+	if err != nil {
+		t.Fatalf("Failed to stat private key: %v", err)
+	}
+	if privateInfo.Mode().Perm() != 0600 {
+		t.Errorf("Private key should have 0600 permissions, got %v", privateInfo.Mode().Perm())
+	}
+
+	registryPubInfo, err := os.Stat(registryPublicPath)
+	if err != nil {
+		t.Fatalf("Failed to stat registry public key: %v", err)
+	}
+	if registryPubInfo.Mode().Perm() != 0644 {
+		t.Errorf("Registry public key should have 0644 permissions, got %v", registryPubInfo.Mode().Perm())
 	}
 }

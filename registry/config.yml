@@ -12,10 +12,10 @@ storage:
     enabled: false
 auth:
   token:
-    realm: https://api.laymatched.com/installer/authorize
+    realm: https://api.laymatched.com/token
     service: registry.laymatched.io
     issuer: laymatched-auth
-    rootcertbundle: /certs/public.pem
+    rootcertbundle: /certs/auth-public.pem
 http:
   addr: :5000
   headers:

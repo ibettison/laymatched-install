@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 RUN apk add --no-cache gcc musl-dev sqlite-dev
 
@@ -22,10 +22,10 @@ RUN mkdir -p /data && chmod 750 /data
 
 ENV PORT=8443 \
     DB_PATH=/data/auth-tokens.db \
-    APPROVED_VERSION=v0.1.0 \
     REGISTRY_URL=registry.laymatched.io \
     PRIVATE_KEY_PATH=/data/private.pem \
     PUBLIC_KEY_PATH=/data/public.pem \
+    REGISTRY_PUBLIC_KEY_PATH=/data/auth-public.pem \
     RATE_LIMIT_PER_MIN=50 \
     LOG_LEVEL=info
 

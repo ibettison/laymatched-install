@@ -8,12 +8,13 @@ services:
     environment:
       - PORT=8443
       - DB_PATH=/data/auth-tokens.db
-      - APPROVED_VERSION=${APPROVED_VERSION:-v0.1.0}
       - REGISTRY_URL=registry.laymatched.io
       - PRIVATE_KEY_PATH=/data/private.pem
       - PUBLIC_KEY_PATH=/data/public.pem
+      - REGISTRY_PUBLIC_KEY_PATH=/data/auth-public.pem
       - RATE_LIMIT_PER_MIN=50
       - LOG_LEVEL=info
+      - TRUSTED_PROXIES=127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
     volumes:
       - auth-data:/data
     networks:
@@ -33,7 +34,7 @@ services:
       - REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry
     volumes:
       - registry-data:/var/lib/registry
-      - ./registry/certs:/certs:ro
+      - auth-data:/certs:ro
     networks:
       - laymatched-internal
     healthcheck:
