@@ -15,7 +15,7 @@ auth:
     realm: https://api.laymatched.com/token
     service: registry.laymatched.io
     issuer: laymatched-auth
-    rootcertbundle: /certs/auth-public.pem
+    rootcertbundle: /certs/auth-cert.pem
 http:
   addr: :5000
   headers:

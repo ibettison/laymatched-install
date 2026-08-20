@@ -209,9 +209,21 @@ func TestTokenServiceWithInstallerToken(t *testing.T) {
 	if claims["sub"] != "laymatched-installer" {
 		t.Errorf("Wrong subject: %v", claims["sub"])
 	}
-	scope := claims["scope"].(string)
-	if scope != "repository:laymatched-api:pull" {
-		t.Errorf("Wrong scope: %s", scope)
+	// Verify access claim (Docker Distribution format)
+	access := claims["access"].([]interface{})
+	if len(access) != 1 {
+		t.Errorf("Expected 1 access entry, got %d", len(access))
+	}
+	accessEntry := access[0].(map[string]interface{})
+	if accessEntry["type"] != "repository" {
+		t.Errorf("Wrong access type: %v", accessEntry["type"])
+	}
+	if accessEntry["name"] != "laymatched-api" {
+		t.Errorf("Wrong access name: %v", accessEntry["name"])
+	}
+	actions := accessEntry["actions"].([]interface{})
+	if len(actions) != 1 || actions[0] != "pull" {
+		t.Errorf("Wrong access actions: %v", actions)
 	}
 	if claims["customer_id"] != "customer-1" {
 		t.Errorf("Wrong customer_id: %v", claims["customer_id"])
@@ -696,6 +708,7 @@ func TestRegistryPublicKeyDistribution(t *testing.T) {
 	privatePath := filepath.Join(tmpDir, "private.pem")
 	publicPath := filepath.Join(tmpDir, "public.pem")
 	registryPublicPath := filepath.Join(tmpDir, "auth-public.pem")
+	registryCertPath := filepath.Join(tmpDir, "auth-cert.pem")
 
 	cfg = Config{
 		RegistryURL:           "registry.laymatched.io",
@@ -703,11 +716,12 @@ func TestRegistryPublicKeyDistribution(t *testing.T) {
 		PrivateKeyPath:        privatePath,
 		PublicKeyPath:         publicPath,
 		RegistryPublicKeyPath: registryPublicPath,
+		RegistryCertPath:      registryCertPath,
 	}
 	approvedVersion = loadApprovedVersion()
 
 	// Call loadOrGenerateKeys - should write to all three paths
-	priv, pub, err := loadOrGenerateKeys(privatePath, publicPath, registryPublicPath)
+	priv, pub, err := loadOrGenerateKeys(privatePath, publicPath, registryPublicPath, registryCertPath)
 	if err != nil {
 		t.Fatalf("loadOrGenerateKeys failed: %v", err)
 	}
@@ -715,7 +729,7 @@ func TestRegistryPublicKeyDistribution(t *testing.T) {
 	publicKey = pub
 
 	// Verify all three files exist
-	for _, p := range []string{privatePath, publicPath, registryPublicPath} {
+	for _, p := range []string{privatePath, publicPath, registryPublicPath, registryCertPath} {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("Expected file %s to exist: %v", p, err)
 		}

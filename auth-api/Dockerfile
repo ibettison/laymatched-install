@@ -26,6 +26,7 @@ ENV PORT=8443 \
     PRIVATE_KEY_PATH=/data/private.pem \
     PUBLIC_KEY_PATH=/data/public.pem \
     REGISTRY_PUBLIC_KEY_PATH=/data/auth-public.pem \
+    REGISTRY_CERT_PATH=/data/auth-cert.pem \
     RATE_LIMIT_PER_MIN=50 \
     LOG_LEVEL=info
 

@@ -19,8 +19,13 @@ on:
       app_repo:
         description: 'Source application repository (owner/name)'
         required: false
-        default: 'ibettison/laymatched-app'
+        default: 'ibettison/laymatched'
         type: string
+      update_approved_version:
+        description: 'Update approved version on VPS after successful publish'
+        required: false
+        default: 'true'
+        type: boolean
 
 permissions:
   contents: read
@@ -130,7 +135,7 @@ jobs:
           echo "Images verified pullable"
 
       - name: Update approved version on VPS
-        if: env.VPS_HOST != ''
+        if: ${{ inputs.update_approved_version == 'true' && secrets.VPS_HOST != '' }}
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -141,6 +146,7 @@ jobs:
             echo "Approved version updated to ${{ inputs.version }}"
 
       - name: Verify approved version is live
+        if: ${{ inputs.update_approved_version == 'true' && secrets.VPS_HOST != '' }}
         run: |
           # Poll for file watcher to pick up change (max 30 seconds, poll every 2 seconds)
           max_attempts=15

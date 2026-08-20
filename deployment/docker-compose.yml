@@ -12,6 +12,7 @@ services:
       - PRIVATE_KEY_PATH=/data/private.pem
       - PUBLIC_KEY_PATH=/data/public.pem
       - REGISTRY_PUBLIC_KEY_PATH=/data/auth-public.pem
+      - REGISTRY_CERT_PATH=/data/auth-cert.pem
       - RATE_LIMIT_PER_MIN=50
       - LOG_LEVEL=info
       - TRUSTED_PROXIES=127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16

@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -50,6 +52,7 @@ type Config struct {
 	PrivateKeyPath        string
 	PublicKeyPath         string
 	RegistryPublicKeyPath string
+	RegistryCertPath      string
 	RateLimitPerMin       int
 	LogLevel              string
 	TrustedProxies        string
@@ -244,6 +247,7 @@ func loadConfig() Config {
 		PrivateKeyPath:        getEnv("PRIVATE_KEY_PATH", "/data/private.pem"),
 		PublicKeyPath:         getEnv("PUBLIC_KEY_PATH", "/data/public.pem"),
 		RegistryPublicKeyPath: getEnv("REGISTRY_PUBLIC_KEY_PATH", "/data/auth-public.pem"),
+		RegistryCertPath:      getEnv("REGISTRY_CERT_PATH", "/data/auth-cert.pem"),
 		RateLimitPerMin:       getEnvInt("RATE_LIMIT_PER_MIN", 50),
 		LogLevel:              getEnv("LOG_LEVEL", "info"),
 		TrustedProxies:        getEnv("TRUSTED_PROXIES", "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"),
@@ -314,7 +318,7 @@ func initDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-func loadOrGenerateKeys(privatePath, publicPath, registryPublicPath string) (*rsa.PrivateKey, *rsa.PublicKey, error) {
+func loadOrGenerateKeys(privatePath, publicPath, registryPublicPath, registryCertPath string) (*rsa.PrivateKey, *rsa.PublicKey, error) {
 	privPEM, err := os.ReadFile(privatePath)
 	if err == nil {
 		block, _ := pem.Decode(privPEM)
@@ -336,6 +340,12 @@ func loadOrGenerateKeys(privatePath, publicPath, registryPublicPath string) (*rs
 						if _, err := os.Stat(registryPublicPath); os.IsNotExist(err) {
 							if err := writePublicKey(registryPublicPath, rsaPub); err != nil {
 								log.Printf(`{"level":"warn","message":"failed to write registry public key","path":"%s","error":"%v"}`, registryPublicPath, err)
+							}
+						}
+						// Ensure registry certificate also exists
+						if _, err := os.Stat(registryCertPath); os.IsNotExist(err) {
+							if err := generateAndWriteCert(registryCertPath, priv); err != nil {
+								log.Printf(`{"level":"warn","message":"failed to write registry certificate","path":"%s","error":"%v"}`, registryCertPath, err)
 							}
 						}
 						return priv, rsaPub, nil
@@ -377,7 +387,41 @@ func loadOrGenerateKeys(privatePath, publicPath, registryPublicPath string) (*rs
 		return nil, nil, err
 	}
 
+	// Generate and write X.509 certificate for registry rootcertbundle
+	if err := generateAndWriteCert(registryCertPath, priv); err != nil {
+		return nil, nil, err
+	}
+
 	return priv, &priv.PublicKey, nil
+}
+
+func generateAndWriteCert(certPath string, priv *rsa.PrivateKey) error {
+	// Generate a self-signed X.509 certificate for the registry to trust
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"LayMatched Auth"},
+			CommonName:   "laymatched-auth",
+		},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour), // 10 years
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            0,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		return err
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certDER,
+	})
+	return os.WriteFile(certPath, certPEM, 0644)
 }
 
 func writePublicKey(path string, pub *rsa.PublicKey) error {
@@ -454,14 +498,40 @@ func generateToken(prefix string) (string, error) {
 
 func generateRegistryToken(customerID string, scopes string, ttl time.Duration) (string, error) {
 	now := time.Now()
+
+	// Parse scopes and build Docker Distribution compatible access entries
+	// Scopes format: "repository:laymatched-api:pull,repository:laymatched-web:push"
+	var access []map[string]interface{}
+	for _, scope := range strings.Split(scopes, ",") {
+		scope = strings.TrimSpace(scope)
+		if scope == "" {
+			continue
+		}
+		parts := strings.Split(scope, ":")
+		if len(parts) != 3 {
+			continue
+		}
+		resourceType := parts[0]   // "repository"
+		resourceName := parts[1]   // "laymatched-api"
+		action := parts[2]         // "pull", "push", etc.
+
+		if resourceType == "repository" {
+			access = append(access, map[string]interface{}{
+				"type":    resourceType,
+				"name":    resourceName,
+				"actions": []string{action},
+			})
+		}
+	}
+
 	claims := jwt.MapClaims{
-		"iss":         issuer,
-		"sub":         "laymatched-installer",
-		"aud":         audience,
-		"scope":       scopes,
-		"iat":         now.Unix(),
-		"exp":         now.Add(ttl).Unix(),
-		"customer_id": customerID,
+		"iss":          issuer,
+		"sub":          "laymatched-installer",
+		"aud":          audience,
+		"access":       access,
+		"iat":          now.Unix(),
+		"exp":          now.Add(ttl).Unix(),
+		"customer_id":  customerID,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
@@ -620,7 +690,7 @@ func tokenServiceHandler(c *gin.Context) {
 	var req TokenServiceRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
 		logError(c, http.StatusBadRequest, "-", "invalid token service request")
-		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io",scope="repository:laymatched-api:pull,repository:laymatched-web:pull"`)
+		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
@@ -628,14 +698,14 @@ func tokenServiceHandler(c *gin.Context) {
 	authHeader := c.GetHeader("Authorization")
 	if authHeader == "" {
 		logError(c, http.StatusUnauthorized, "-", "missing authorization header")
-		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io",scope="repository:laymatched-api:pull,repository:laymatched-web:pull"`)
+		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
 
 	if !strings.HasPrefix(authHeader, "Bearer ") {
 		logError(c, http.StatusUnauthorized, "-", "invalid authorization scheme")
-		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io",scope="repository:laymatched-api:pull,repository:laymatched-web:pull"`)
+		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -653,13 +723,13 @@ func tokenServiceHandler(c *gin.Context) {
 		inst, err := findInstallerTokenByHash(tokenHash)
 		if err != nil || inst == nil {
 			logRequest(c, http.StatusUnauthorized, tokenPrefix, "invalid or revoked token")
-			c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io",scope="repository:laymatched-api:pull,repository:laymatched-web:pull"`)
+			c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 			return
 		}
 		if err := isTokenValid(inst.RevokedAt, inst.ExpiresAt); err != nil {
 			logRequest(c, http.StatusUnauthorized, tokenPrefix, "invalid or revoked token")
-			c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io",scope="repository:laymatched-api:pull,repository:laymatched-web:pull"`)
+			c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 			return
 		}
@@ -680,7 +750,7 @@ func tokenServiceHandler(c *gin.Context) {
 			}
 			if !allowed {
 				logRequest(c, http.StatusForbidden, tokenPrefix, "scope not authorized for installer token")
-				c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io",scope="repository:laymatched-api:pull,repository:laymatched-web:pull"`)
+				c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
 				c.JSON(http.StatusForbidden, gin.H{"error": "scope not authorized"})
 				return
 			}
@@ -712,23 +782,35 @@ func tokenServiceHandler(c *gin.Context) {
 
 	if err != nil || t == nil {
 		logRequest(c, http.StatusUnauthorized, tokenPrefix, "invalid or revoked owner token")
-		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io",scope="repository:laymatched-api:pull,repository:laymatched-web:pull"`)
+		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
 
 	if err := isTokenValid(t.RevokedAt, t.ExpiresAt); err != nil {
 		logRequest(c, http.StatusUnauthorized, tokenPrefix, "invalid or revoked owner token")
-		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io",scope="repository:laymatched-api:pull,repository:laymatched-web:pull"`)
+		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
 
-	if req.Scope != "" && !strings.Contains(t.Scopes, req.Scope) {
-		logRequest(c, http.StatusForbidden, tokenPrefix, "scope not authorized")
-		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io",scope="repository:laymatched-api:pull,repository:laymatched-web:pull"`)
-		c.JSON(http.StatusForbidden, gin.H{"error": "scope not authorized"})
-		return
+	// For owner tokens, validate requested scope against token's allowed scopes
+	if req.Scope != "" {
+		// Parse owner token scopes (comma-separated)
+		allowedScopeMap := make(map[string]bool)
+		for _, s := range strings.Split(t.Scopes, ",") {
+			allowedScopeMap[strings.TrimSpace(s)] = true
+		}
+		// Check each requested scope
+		for _, s := range strings.Split(req.Scope, ",") {
+			s = strings.TrimSpace(s)
+			if !allowedScopeMap[s] {
+				logRequest(c, http.StatusForbidden, tokenPrefix, "scope not authorized")
+				c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
+				c.JSON(http.StatusForbidden, gin.H{"error": "scope not authorized"})
+				return
+			}
+		}
 	}
 
 	if err := updateOwnerTokenLastUsed(t.ID); err != nil {
@@ -840,7 +922,7 @@ func main() {
 	}
 	defer db.Close()
 
-	privateKey, publicKey, err = loadOrGenerateKeys(cfg.PrivateKeyPath, cfg.PublicKeyPath, cfg.RegistryPublicKeyPath)
+	privateKey, publicKey, err = loadOrGenerateKeys(cfg.PrivateKeyPath, cfg.PublicKeyPath, cfg.RegistryPublicKeyPath, cfg.RegistryCertPath)
 	if err != nil {
 		log.Fatalf("Key loading failed: %v", err)
 	}
