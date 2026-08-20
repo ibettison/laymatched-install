@@ -397,16 +397,16 @@ func loadOrGenerateKeys(privatePath, publicPath, registryPublicPath, registryCer
 
 func generateAndWriteCert(certPath string, priv *rsa.PrivateKey) error {
 	// Generate a self-signed X.509 certificate for the registry to trust
+	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).SetUint64(^uint64(0)))
 	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			Organization: []string{"LayMatched Auth"},
-			CommonName:   "laymatched-auth",
+			CommonName: "laymatched-auth",
 		},
-		NotBefore:             time.Now().Add(-time.Hour),
+		NotBefore:             time.Now().Add(-365 * 24 * time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour), // 10 years
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           nil,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 		MaxPathLen:            0,
@@ -511,9 +511,9 @@ func generateRegistryToken(customerID string, scopes string, ttl time.Duration) 
 		if len(parts) != 3 {
 			continue
 		}
-		resourceType := parts[0]   // "repository"
-		resourceName := parts[1]   // "laymatched-api"
-		action := parts[2]         // "pull", "push", etc.
+		resourceType := parts[0] // "repository"
+		resourceName := parts[1] // "laymatched-api"
+		action := parts[2]       // "pull", "push", etc.
 
 		if resourceType == "repository" {
 			access = append(access, map[string]interface{}{
@@ -525,15 +525,30 @@ func generateRegistryToken(customerID string, scopes string, ttl time.Duration) 
 	}
 
 	claims := jwt.MapClaims{
-		"iss":          issuer,
-		"sub":          "laymatched-installer",
-		"aud":          audience,
-		"access":       access,
-		"iat":          now.Unix(),
-		"exp":          now.Add(ttl).Unix(),
-		"customer_id":  customerID,
+		"iss":         issuer,
+		"sub":         "laymatched-installer",
+		"aud":         audience,
+		"access":      access,
+		"iat":         now.Unix(),
+		"exp":         now.Add(ttl).Unix(),
+		"customer_id": customerID,
 	}
 
+	// Read certificate for x5c header (required by Docker Distribution token auth)
+	// If certificate is not available (e.g., in unit tests), skip x5c header
+	certPEM, err := os.ReadFile(cfg.RegistryCertPath)
+	if err == nil {
+		block, _ := pem.Decode(certPEM)
+		if block != nil && block.Type == "CERTIFICATE" {
+			certDER := block.Bytes
+			certB64 := base64.StdEncoding.EncodeToString(certDER)
+			token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+			token.Header["x5c"] = []string{certB64}
+			return token.SignedString(privateKey)
+		}
+	}
+
+	// Fallback: sign without x5c header (for environments without certificate)
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	return token.SignedString(privateKey)
 }
