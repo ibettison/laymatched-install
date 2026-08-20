@@ -1,0 +1,226 @@
+name: Publish Approved Release to Private Registry
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Approved version tag (e.g., v0.1.1)'
+        required: true
+        type: string
+      sha:
+        description: 'Git SHA to release (defaults to current)'
+        required: false
+        type: string
+      registry_url:
+        description: 'Private registry URL'
+        required: false
+        default: 'registry.laymatched.io'
+        type: string
+      app_repo:
+        description: 'GHCR namespace (owner) where application images are published (e.g., ibettison)'
+        required: false
+        default: 'ibettison'
+        type: string
+      update_approved_version:
+        description: 'Update approved version on VPS after successful publish'
+        required: false
+        default: 'true'
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to Private Registry
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR (source)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine SHA
+        id: sha
+        run: |
+          if [ -n "${{ inputs.sha }}" ]; then
+            echo "sha=${{ inputs.sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate source image coordinates
+        run: |
+          set -euo pipefail
+          app_repo="${{ inputs.app_repo }}"
+          # The LayMatched application release process publishes user-level GHCR
+          # packages (verified against ibettison/layMatchedBetting runs):
+          #   ghcr.io/ibettison/laymatched-api
+          #   ghcr.io/ibettison/laymatched-web
+          # GHCR normalizes names to lowercase, so the namespace must be a
+          # single-segment owner (no repo sub-path).
+          ns="${app_repo,,}"
+          case "${ns}" in
+            */*) echo "app_repo must be a single-segment GHCR namespace (owner), got: ${app_repo}"; exit 1 ;;
+            *) ;;
+          esac
+          api_ref="ghcr.io/${ns}/laymatched-api"
+          web_ref="ghcr.io/${ns}/laymatched-web"
+          echo "Resolved API image: ${api_ref}"
+          echo "Resolved Web image: ${web_ref}"
+          echo "api_image=${api_ref}" >> $GITHUB_OUTPUT
+          echo "web_image=${web_ref}" >> $GITHUB_OUTPUT
+          if [ "${app_repo}" == "ibettison" ]; then
+            [ "${api_ref}" == "ghcr.io/ibettison/laymatched-api" ] \
+              || { echo "Default API coordinate mismatch: ${api_ref}"; exit 1; }
+            [ "${web_ref}" == "ghcr.io/ibettison/laymatched-web" ] \
+              || { echo "Default Web coordinate mismatch: ${web_ref}"; exit 1; }
+          fi
+          echo "Source coordinates validated"
+
+      - name: Verify source API image exists
+        run: |
+          docker pull ghcr.io/${{ inputs.app_repo }}/laymatched-api:${{ inputs.version }}
+          docker pull ghcr.io/${{ inputs.app_repo }}/laymatched-web:${{ inputs.version }}
+
+      - name: Retag API image for private registry
+        run: |
+          docker tag ghcr.io/${{ inputs.app_repo }}/laymatched-api:${{ inputs.version }} \
+            ${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}
+
+      - name: Retag Web image for private registry
+        run: |
+          docker tag ghcr.io/${{ inputs.app_repo }}/laymatched-web:${{ inputs.version }} \
+            ${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}
+
+      - name: Get owner token for registry push
+        id: owner_token
+        run: |
+          # Exchange owner token for registry push token via Auth API token service
+          response=$(curl -fsS -X GET \
+            -H "Authorization: Bearer ${{ secrets.OWNER_TOKEN }}" \
+            "https://api.laymatched.com/token?service=registry.laymatched.io&scope=repository:laymatched-api:push,repository:laymatched-web:push")
+          echo "registry_token=$(echo "$response" | jq -r .token)" >> $GITHUB_OUTPUT
+          if [ "$(echo "$response" | jq -r .token)" == "null" ] || [ -z "$(echo "$response" | jq -r .token)" ]; then
+            echo "Failed to obtain registry token"
+            echo "$response"
+            exit 1
+          fi
+
+      - name: Log in to Private Registry (push)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry_url }}
+          username: laymatched-owner
+          password: ${{ steps.owner_token.outputs.registry_token }}
+
+      - name: Push API image to private registry
+        run: |
+          docker push ${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}
+
+      - name: Push Web image to private registry
+        run: |
+          docker push ${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}
+
+      - name: Verify images are pullable from private registry
+        run: |
+          # Test pull with installer token via token service
+          installer_response=$(curl -fsS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"installer_token\": \"${{ secrets.TEST_INSTALLER_TOKEN }}\"}" \
+            "https://api.laymatched.com/installer/authorize")
+          installer_token=$(echo "$installer_response" | jq -r .registry_token)
+          
+          # Exchange installer token for registry JWT via token service
+          token_response=$(curl -fsS -X GET \
+            -H "Authorization: Bearer $installer_token" \
+            "https://api.laymatched.com/token?service=registry.laymatched.io&scope=repository:laymatched-api:pull,repository:laymatched-web:pull")
+          registry_jwt=$(echo "$token_response" | jq -r .token)
+          
+          if [ "$registry_jwt" == "null" ] || [ -z "$registry_jwt" ]; then
+            echo "Failed to obtain registry JWT"
+            echo "$token_response"
+            exit 1
+          fi
+          
+          docker login ${{ inputs.registry_url }} -u laymatched-installer --password-stdin <<< "$registry_jwt"
+          
+          docker pull ${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}
+          docker pull ${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}
+          
+          echo "Images verified pullable"
+
+      - name: Update approved version on VPS
+        if: ${{ inputs.update_approved_version == 'true' && secrets.VPS_HOST != '' }}
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "${{ inputs.version }}" | sudo tee /opt/laymatched-auth/data/approved_version.txt
+            echo "Approved version updated to ${{ inputs.version }}"
+
+      - name: Verify approved version is live
+        if: ${{ inputs.update_approved_version == 'true' && secrets.VPS_HOST != '' }}
+        run: |
+          # Poll for file watcher to pick up change (max 30 seconds, poll every 2 seconds)
+          max_attempts=15
+          attempt=0
+          while [ $attempt -lt $max_attempts ]; do
+            response=$(curl -fsS -X POST \
+              -H "Content-Type: application/json" \
+              -d "{\"installer_token\": \"${{ secrets.TEST_INSTALLER_TOKEN }}\"}" \
+              "https://api.laymatched.com/installer/authorize")
+            approved_version=$(echo "$response" | jq -r .approved_version)
+            if [ "$approved_version" == "${{ inputs.version }}" ]; then
+              echo "Approved version confirmed: $approved_version"
+              exit 0
+            fi
+            attempt=$((attempt + 1))
+            echo "Waiting for approved version to propagate... (attempt $attempt/$max_attempts)"
+            sleep 2
+          done
+          echo "ERROR: Approved version not updated after $max_attempts attempts. Expected ${{ inputs.version }}, got $approved_version"
+          exit 1
+
+      - name: Summary
+        run: |
+          echo "## Release Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Tag |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| laymatched-api | ${{ inputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| laymatched-web | ${{ inputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Registry: ${{ inputs.registry_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "Source GHCR namespace: ${{ inputs.app_repo }}" >> $GITHUB_STEP_SUMMARY
+          echo "SHA: ${{ steps.sha.outputs.sha }}" >> $GITHUB_STEP_SUMMARY
+
+  notify:
+    name: Notify
+    needs: publish
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Report status
+        run: |
+          if [ "${{ needs.publish.result }}" == "success" ]; then
+            echo "✅ Release ${{ github.event.inputs.version }} published successfully"
+          else
+            echo "❌ Release ${{ github.event.inputs.version }} failed"
+            exit 1
+          fi
