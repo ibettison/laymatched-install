@@ -106,26 +106,12 @@ jobs:
           docker tag ghcr.io/${{ inputs.app_repo }}/laymatched-web:${{ inputs.version }} \
             ${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}
 
-      - name: Get owner token for registry push
-        id: owner_token
-        run: |
-          # Exchange owner token for registry push token via Auth API token service
-          response=$(curl -fsS -X GET \
-            -H "Authorization: Bearer ${{ secrets.OWNER_TOKEN }}" \
-            "https://api.laymatched.com/token?service=registry.laymatched.io&scope=repository:laymatched-api:push,repository:laymatched-web:push")
-          echo "registry_token=$(echo "$response" | jq -r .token)" >> $GITHUB_OUTPUT
-          if [ "$(echo "$response" | jq -r .token)" == "null" ] || [ -z "$(echo "$response" | jq -r .token)" ]; then
-            echo "Failed to obtain registry token"
-            echo "$response"
-            exit 1
-          fi
-
-      - name: Log in to Private Registry (push)
+      - name: Log in to Private Registry (push) with owner credential
         uses: docker/login-action@v3
         with:
           registry: ${{ inputs.registry_url }}
           username: laymatched-owner
-          password: ${{ steps.owner_token.outputs.registry_token }}
+          password: ${{ secrets.OWNER_TOKEN }}
 
       - name: Push API image to private registry
         run: |
@@ -137,26 +123,8 @@ jobs:
 
       - name: Verify images are pullable from private registry
         run: |
-          # Test pull with installer token via token service
-          installer_response=$(curl -fsS -X POST \
-            -H "Content-Type: application/json" \
-            -d "{\"installer_token\": \"${{ secrets.TEST_INSTALLER_TOKEN }}\"}" \
-            "https://api.laymatched.com/installer/authorize")
-          installer_token=$(echo "$installer_response" | jq -r .registry_token)
-          
-          # Exchange installer token for registry JWT via token service
-          token_response=$(curl -fsS -X GET \
-            -H "Authorization: Bearer $installer_token" \
-            "https://api.laymatched.com/token?service=registry.laymatched.io&scope=repository:laymatched-api:pull,repository:laymatched-web:pull")
-          registry_jwt=$(echo "$token_response" | jq -r .token)
-          
-          if [ "$registry_jwt" == "null" ] || [ -z "$registry_jwt" ]; then
-            echo "Failed to obtain registry JWT"
-            echo "$token_response"
-            exit 1
-          fi
-          
-          docker login ${{ inputs.registry_url }} -u laymatched-installer --password-stdin <<< "$registry_jwt"
+          # Test pull with installer token via Docker login (let Docker follow Bearer challenge)
+          docker login ${{ inputs.registry_url }} -u laymatched-installer --password-stdin <<< "${{ secrets.TEST_INSTALLER_TOKEN }}"
           
           docker pull ${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}
           docker pull ${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}

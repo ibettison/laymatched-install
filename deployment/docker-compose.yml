@@ -39,7 +39,7 @@ services:
     networks:
       - laymatched-internal
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:5000/v2/"]
+      test: ["CMD", "sh", "-c", "output=$(wget --spider -S http://localhost:5000/v2/ 2>&1); echo \"$output\" | grep -qE \"HTTP/1\\.[01] (200|401)\" && (echo \"$output\" | grep -qi \"www-authenticate:.*bearer\" || echo \"$output\" | grep -q \"HTTP/1\\.[01] 200\")"]
       interval: 30s
       timeout: 10s
       retries: 3
