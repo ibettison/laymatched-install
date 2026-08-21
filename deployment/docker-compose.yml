@@ -39,7 +39,7 @@ services:
     networks:
       - laymatched-internal
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:5000/v2/"]
+      test: ["CMD", "sh", "-c", "wget -q --spider http://localhost:5000/v2/ 2>&1 | grep -q 'HTTP.*401\\|HTTP.*200'"]
       interval: 30s
       timeout: 10s
       retries: 3
