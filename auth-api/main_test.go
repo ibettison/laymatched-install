@@ -111,7 +111,7 @@ func TestAuthorizeValidToken(t *testing.T) {
 	cfg = Config{
 		Port:            "8443",
 		DBPath:          "",
-		RegistryURL:     "registry.laymatched.io",
+		RegistryURL:     "registry.matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	db = testDB
@@ -139,8 +139,8 @@ func TestAuthorizeValidToken(t *testing.T) {
 	if resp.ApprovedVersion != "v0.1.0" {
 		t.Errorf("Expected version v0.1.0, got %s", resp.ApprovedVersion)
 	}
-	if resp.RegistryURL != "registry.laymatched.io" {
-		t.Errorf("Expected registry.laymatched.io, got %s", resp.RegistryURL)
+	if resp.RegistryURL != "registry.matched.laysports.co.uk" {
+		t.Errorf("Expected registry.matched.laysports.co.uk, got %s", resp.RegistryURL)
 	}
 	// registry_token should be the installer token itself (for use with /token endpoint)
 	if resp.RegistryToken != token {
@@ -159,7 +159,7 @@ func TestTokenServiceWithInstallerToken(t *testing.T) {
 	publicKey = pub
 
 	cfg = Config{
-		RegistryURL:     "registry.laymatched.io",
+		RegistryURL:     "registry.matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	db = testDB
@@ -172,7 +172,7 @@ func TestTokenServiceWithInstallerToken(t *testing.T) {
 
 	// Call token service with installer token
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/token?service=registry.laymatched.io&scope=repository:laymatched-api:pull", nil)
+	req, _ := http.NewRequest("GET", "/token?service=registry.matched.laysports.co.uk&scope=repository:laymatched-api:pull", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	router.ServeHTTP(w, req)
 
@@ -241,7 +241,7 @@ func TestAuthorizeUnknownToken(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		RegistryURL:     "registry.laymatched.io",
+		RegistryURL:     "registry.matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	approvedVersion = loadApprovedVersion()
@@ -275,7 +275,7 @@ func TestAuthorizeRevokedToken(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		RegistryURL:     "registry.laymatched.io",
+		RegistryURL:     "registry.matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	approvedVersion = loadApprovedVersion()
@@ -306,7 +306,7 @@ func TestAuthorizeExpiredToken(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		RegistryURL:     "registry.laymatched.io",
+		RegistryURL:     "registry.matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	approvedVersion = loadApprovedVersion()
@@ -333,7 +333,7 @@ func TestAuthorizeMalformedRequest(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		RegistryURL:     "registry.laymatched.io",
+		RegistryURL:     "registry.matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	approvedVersion = loadApprovedVersion()
@@ -357,7 +357,7 @@ func TestHealthEndpoint(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		RegistryURL:     "registry.laymatched.io",
+		RegistryURL:     "registry.matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	approvedVersion = loadApprovedVersion()
@@ -387,7 +387,7 @@ func TestJWKSEndpoint(t *testing.T) {
 	publicKey = pub
 
 	cfg = Config{
-		RegistryURL:     "registry.laymatched.io",
+		RegistryURL:     "registry.matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	approvedVersion = loadApprovedVersion()
@@ -425,7 +425,7 @@ func TestTokenHashNotLogged(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		RegistryURL:     "registry.laymatched.io",
+		RegistryURL:     "registry.matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	approvedVersion = loadApprovedVersion()
@@ -463,7 +463,7 @@ func TestRegistryTokenTTL(t *testing.T) {
 	publicKey = pub
 
 	cfg = Config{
-		RegistryURL:     "registry.laymatched.io",
+		RegistryURL:     "registry.matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	approvedVersion = loadApprovedVersion()
@@ -475,7 +475,7 @@ func TestRegistryTokenTTL(t *testing.T) {
 
 	// Call token service to get registry JWT
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/token?service=registry.laymatched.io&scope=repository:laymatched-api:pull", nil)
+	req, _ := http.NewRequest("GET", "/token?service=registry.matched.laysports.co.uk&scope=repository:laymatched-api:pull", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	router.ServeHTTP(w, req)
 
@@ -521,7 +521,7 @@ func TestApprovedVersionChange(t *testing.T) {
 	approvedVersion = loadApprovedVersion()
 
 	cfg = Config{
-		RegistryURL:     "registry.laymatched.io",
+		RegistryURL:     "registry.matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	router := setupRouter()
@@ -566,7 +566,7 @@ func TestRegistryURLReturned(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		RegistryURL:     "registry.laymatched.io",
+		RegistryURL:     "registry.matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	approvedVersion = loadApprovedVersion()
@@ -584,8 +584,8 @@ func TestRegistryURLReturned(t *testing.T) {
 	var resp AuthorizeResponse
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
-	if resp.RegistryURL != "registry.laymatched.io" {
-		t.Errorf("Expected registry.laymatched.io, got %s", resp.RegistryURL)
+	if resp.RegistryURL != "registry.matched.laysports.co.uk" {
+		t.Errorf("Expected registry.matched.laysports.co.uk, got %s", resp.RegistryURL)
 	}
 }
 
@@ -600,7 +600,7 @@ func TestRateLimiting(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		RegistryURL:     "registry.laymatched.io",
+		RegistryURL:     "registry.matched.laysports.co.uk",
 		RateLimitPerMin: 2,
 	}
 	approvedVersion = loadApprovedVersion()
@@ -673,7 +673,7 @@ func TestConcurrentTokenValidation(t *testing.T) {
 	privateKey = priv
 
 	cfg = Config{
-		RegistryURL:     "registry.laymatched.io",
+		RegistryURL:     "registry.matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 
@@ -711,7 +711,7 @@ func TestRegistryPublicKeyDistribution(t *testing.T) {
 	registryCertPath := filepath.Join(tmpDir, "auth-cert.pem")
 
 	cfg = Config{
-		RegistryURL:           "registry.laymatched.io",
+		RegistryURL:           "registry.matched.laysports.co.uk",
 		RateLimitPerMin:       1000,
 		PrivateKeyPath:        privatePath,
 		PublicKeyPath:         publicPath,

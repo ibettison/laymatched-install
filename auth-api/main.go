@@ -38,7 +38,7 @@ const (
 	registryTokenTTL         = 1 * time.Hour
 	ownerTokenTTL            = 24 * time.Hour
 	issuer                   = "laymatched-auth"
-	audience                 = "registry.laymatched.io"
+	audience                 = "registry.matched.laysports.co.uk"
 	rateLimitCleanupInterval = 5 * time.Minute
 	maxRateLimitEntries      = 10000 // Maximum number of IPs to track
 )
@@ -243,7 +243,7 @@ func loadConfig() Config {
 	return Config{
 		Port:                  getEnv("PORT", "8443"),
 		DBPath:                getEnv("DB_PATH", "/data/auth-tokens.db"),
-		RegistryURL:           getEnv("REGISTRY_URL", "registry.laymatched.io"),
+		RegistryURL:           getEnv("REGISTRY_URL", "registry.matched.laysports.co.uk"),
 		PrivateKeyPath:        getEnv("PRIVATE_KEY_PATH", "/data/private.pem"),
 		PublicKeyPath:         getEnv("PUBLIC_KEY_PATH", "/data/public.pem"),
 		RegistryPublicKeyPath: getEnv("REGISTRY_PUBLIC_KEY_PATH", "/data/auth-public.pem"),
@@ -720,7 +720,7 @@ func tokenServiceHandler(c *gin.Context) {
 	var req TokenServiceRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
 		logError(c, http.StatusBadRequest, "-", "invalid token service request")
-		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
+		c.Header("WWW-Authenticate", `Bearer realm="https://auth.matched.laysports.co.uk/token",service="registry.matched.laysports.co.uk"`)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
@@ -728,7 +728,7 @@ func tokenServiceHandler(c *gin.Context) {
 	authHeader := c.GetHeader("Authorization")
 	if authHeader == "" {
 		logError(c, http.StatusUnauthorized, "-", "missing authorization header")
-		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
+		c.Header("WWW-Authenticate", `Bearer realm="https://auth.matched.laysports.co.uk/token",service="registry.matched.laysports.co.uk"`)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -744,21 +744,21 @@ func tokenServiceHandler(c *gin.Context) {
 		decoded, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			logError(c, http.StatusUnauthorized, "-", "invalid basic auth encoding")
-			c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
+			c.Header("WWW-Authenticate", `Bearer realm="https://auth.matched.laysports.co.uk/token",service="registry.matched.laysports.co.uk"`)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 			return
 		}
 		parts := strings.SplitN(string(decoded), ":", 2)
 		if len(parts) != 2 || parts[1] == "" {
 			logError(c, http.StatusUnauthorized, "-", "invalid basic auth credentials")
-			c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
+			c.Header("WWW-Authenticate", `Bearer realm="https://auth.matched.laysports.co.uk/token",service="registry.matched.laysports.co.uk"`)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 			return
 		}
 		token = parts[1]
 	} else {
 		logError(c, http.StatusUnauthorized, "-", "invalid authorization scheme")
-		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
+		c.Header("WWW-Authenticate", `Bearer realm="https://auth.matched.laysports.co.uk/token",service="registry.matched.laysports.co.uk"`)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -775,13 +775,13 @@ func tokenServiceHandler(c *gin.Context) {
 		inst, err := findInstallerTokenByHash(tokenHash)
 		if err != nil || inst == nil {
 			logRequest(c, http.StatusUnauthorized, tokenPrefix, "invalid or revoked token")
-			c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
+			c.Header("WWW-Authenticate", `Bearer realm="https://auth.matched.laysports.co.uk/token",service="registry.matched.laysports.co.uk"`)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 			return
 		}
 		if err := isTokenValid(inst.RevokedAt, inst.ExpiresAt); err != nil {
 			logRequest(c, http.StatusUnauthorized, tokenPrefix, "invalid or revoked token")
-			c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
+			c.Header("WWW-Authenticate", `Bearer realm="https://auth.matched.laysports.co.uk/token",service="registry.matched.laysports.co.uk"`)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 			return
 		}
@@ -797,7 +797,7 @@ func tokenServiceHandler(c *gin.Context) {
 		for _, s := range parseScopePairs(scope) {
 			if !allowedMap[s] {
 				logRequest(c, http.StatusForbidden, tokenPrefix, "scope not authorized for installer token")
-				c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
+				c.Header("WWW-Authenticate", `Bearer realm="https://auth.matched.laysports.co.uk/token",service="registry.matched.laysports.co.uk"`)
 				c.JSON(http.StatusForbidden, gin.H{"error": "scope not authorized"})
 				return
 			}
@@ -829,14 +829,14 @@ func tokenServiceHandler(c *gin.Context) {
 
 	if err != nil || t == nil {
 		logRequest(c, http.StatusUnauthorized, tokenPrefix, "invalid or revoked owner token")
-		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
+		c.Header("WWW-Authenticate", `Bearer realm="https://auth.matched.laysports.co.uk/token",service="registry.matched.laysports.co.uk"`)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
 
 	if err := isTokenValid(t.RevokedAt, t.ExpiresAt); err != nil {
 		logRequest(c, http.StatusUnauthorized, tokenPrefix, "invalid or revoked owner token")
-		c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
+		c.Header("WWW-Authenticate", `Bearer realm="https://auth.matched.laysports.co.uk/token",service="registry.matched.laysports.co.uk"`)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
@@ -850,7 +850,7 @@ func tokenServiceHandler(c *gin.Context) {
 		for _, s := range parseScopePairs(req.Scope) {
 			if !allowedMap[s] {
 				logRequest(c, http.StatusForbidden, tokenPrefix, "scope not authorized")
-				c.Header("WWW-Authenticate", `Bearer realm="https://api.laymatched.com/token",service="registry.laymatched.io"`)
+				c.Header("WWW-Authenticate", `Bearer realm="https://auth.matched.laysports.co.uk/token",service="registry.matched.laysports.co.uk"`)
 				c.JSON(http.StatusForbidden, gin.H{"error": "scope not authorized"})
 				return
 			}

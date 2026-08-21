@@ -49,7 +49,7 @@ func setupAuthAPITest(t *testing.T) (string, string, func(), *sql.DB) {
 			Env: map[string]string{
 				"PORT":                     "8443",
 				"DB_PATH":                  "/data/auth-tokens.db",
-				"REGISTRY_URL":             "registry.laymatched.io",
+				"REGISTRY_URL":             "registry.matched.laysports.co.uk",
 				"PRIVATE_KEY_PATH":         "/data/private.pem",
 				"PUBLIC_KEY_PATH":          "/data/public.pem",
 				"REGISTRY_PUBLIC_KEY_PATH": "/data/auth-public.pem",
@@ -304,7 +304,7 @@ func TestE2EFullRegistryFlow(t *testing.T) {
 			Env: map[string]string{
 				"PORT":                     "8443",
 				"DB_PATH":                  "/data/auth-tokens.db",
-				"REGISTRY_URL":             "registry.laymatched.io",
+				"REGISTRY_URL":             "registry.matched.laysports.co.uk",
 				"PRIVATE_KEY_PATH":         "/data/private.pem",
 				"PUBLIC_KEY_PATH":          "/data/public.pem",
 				"REGISTRY_PUBLIC_KEY_PATH": "/data/auth-public.pem",
@@ -356,7 +356,7 @@ storage:
 auth:
   token:
     realm: %s/token
-    service: registry.laymatched.io
+    service: registry.matched.laysports.co.uk
     issuer: laymatched-auth
     rootcertbundle: /certs/auth-cert.pem
 http:
@@ -715,7 +715,7 @@ func TestE2EUnauthenticatedPullDenied(t *testing.T) {
 	authAPIURL, _, cleanup, _ := setupAuthAPITest(t)
 	defer cleanup()
 
-	resp, err := http.Get(authAPIURL + "/token?service=registry.laymatched.io&scope=repository:laymatched-api:pull")
+	resp, err := http.Get(authAPIURL + "/token?service=registry.matched.laysports.co.uk&scope=repository:laymatched-api:pull")
 	if err != nil {
 		t.Fatalf("Request failed: %v", err)
 	}
@@ -739,7 +739,7 @@ func TestE2EInvalidCredentialDenied(t *testing.T) {
 	authAPIURL, _, cleanup, _ := setupAuthAPITest(t)
 	defer cleanup()
 
-	req, _ := http.NewRequest("GET", authAPIURL+"/token?service=registry.laymatched.io&scope=repository:laymatched-api:pull", nil)
+	req, _ := http.NewRequest("GET", authAPIURL+"/token?service=registry.matched.laysports.co.uk&scope=repository:laymatched-api:pull", nil)
 	req.Header.Set("Authorization", "Bearer lm_inst_invalid12345678901234")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -770,7 +770,7 @@ func TestE2EExpiredRegistryTokenDenied(t *testing.T) {
 		t.Fatalf("Failed to update token expiry: %v", err)
 	}
 
-	req, _ := http.NewRequest("GET", authAPIURL+"/token?service=registry.laymatched.io&scope=repository:laymatched-api:pull", nil)
+	req, _ := http.NewRequest("GET", authAPIURL+"/token?service=registry.matched.laysports.co.uk&scope=repository:laymatched-api:pull", nil)
 	req.Header.Set("Authorization", "Bearer "+expiredToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -794,7 +794,7 @@ func TestE2ETokenCannotPush(t *testing.T) {
 	token := "lm_inst_pushdenied123456789012"
 	insertTestTokenForIntegration(t, db, "customer-push", token)
 
-	req, _ := http.NewRequest("GET", authAPIURL+"/token?service=registry.laymatched.io&scope=repository:laymatched-api:push", nil)
+	req, _ := http.NewRequest("GET", authAPIURL+"/token?service=registry.matched.laysports.co.uk&scope=repository:laymatched-api:push", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -819,7 +819,7 @@ func TestE2ETokenCannotDelete(t *testing.T) {
 	token := "lm_inst_deletedened12345678901"
 	insertTestTokenForIntegration(t, db, "customer-delete", token)
 
-	req, _ := http.NewRequest("GET", authAPIURL+"/token?service=registry.laymatched.io&scope=repository:laymatched-api:delete", nil)
+	req, _ := http.NewRequest("GET", authAPIURL+"/token?service=registry.matched.laysports.co.uk&scope=repository:laymatched-api:delete", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -844,7 +844,7 @@ func TestE2ETokenCannotAccessUnrelatedRepositories(t *testing.T) {
 	token := "lm_inst_unrelated12345678901234"
 	insertTestTokenForIntegration(t, db, "customer-unrelated", token)
 
-	req, _ := http.NewRequest("GET", authAPIURL+"/token?service=registry.laymatched.io&scope=repository:unrelated-repo:pull", nil)
+	req, _ := http.NewRequest("GET", authAPIURL+"/token?service=registry.matched.laysports.co.uk&scope=repository:unrelated-repo:pull", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -869,7 +869,7 @@ func TestE2EBothAPIAndWebImagesPullable(t *testing.T) {
 	token := "lm_inst_bothimages12345678901"
 	insertTestTokenForIntegration(t, db, "customer-both", token)
 
-	req, _ := http.NewRequest("GET", authAPIURL+"/token?service=registry.laymatched.io&scope=repository:laymatched-api:pull,repository:laymatched-web:pull", nil)
+	req, _ := http.NewRequest("GET", authAPIURL+"/token?service=registry.matched.laysports.co.uk&scope=repository:laymatched-api:pull,repository:laymatched-web:pull", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -938,7 +938,7 @@ func TestE2ERegistryCredentialExpires(t *testing.T) {
 	token := "lm_inst_expiretest1234567890123"
 	insertTestTokenForIntegration(t, db, "customer-expire", token)
 
-	req, _ := http.NewRequest("GET", authAPIURL+"/token?service=registry.laymatched.io&scope=repository:laymatched-api:pull", nil)
+	req, _ := http.NewRequest("GET", authAPIURL+"/token?service=registry.matched.laysports.co.uk&scope=repository:laymatched-api:pull", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -1009,7 +1009,7 @@ func TestE2EDockerLoginWithOriginalCredentials(t *testing.T) {
 			Env: map[string]string{
 				"PORT":                     "8443",
 				"DB_PATH":                  "/data/auth-tokens.db",
-				"REGISTRY_URL":             "registry.laymatched.io",
+				"REGISTRY_URL":             "registry.matched.laysports.co.uk",
 				"PRIVATE_KEY_PATH":         "/data/private.pem",
 				"PUBLIC_KEY_PATH":          "/data/public.pem",
 				"REGISTRY_PUBLIC_KEY_PATH": "/data/auth-public.pem",
@@ -1108,7 +1108,7 @@ storage:
 auth:
   token:
     realm: %s/token
-    service: registry.laymatched.io
+    service: registry.matched.laysports.co.uk
     issuer: laymatched-auth
     rootcertbundle: /certs/auth-cert.pem
 http:
@@ -1303,7 +1303,7 @@ func TestRegistryHealthcheck(t *testing.T) {
 			Env: map[string]string{
 				"PORT":                     "8443",
 				"DB_PATH":                  "/data/auth-tokens.db",
-				"REGISTRY_URL":             "registry.laymatched.io",
+				"REGISTRY_URL":             "registry.matched.laysports.co.uk",
 				"PRIVATE_KEY_PATH":         "/data/private.pem",
 				"PUBLIC_KEY_PATH":          "/data/public.pem",
 				"REGISTRY_PUBLIC_KEY_PATH": "/data/auth-public.pem",
@@ -1349,7 +1349,7 @@ storage:
 auth:
   token:
     realm: %s/token
-    service: registry.laymatched.io
+    service: registry.matched.laysports.co.uk
     issuer: laymatched-auth
     rootcertbundle: /certs/auth-cert.pem
 http:

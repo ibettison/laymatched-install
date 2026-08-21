@@ -16,7 +16,7 @@ Owner-side infrastructure for the LayMatched installer authorization and private
 ### Endpoint
 
 ```
-POST https://api.laymatched.com/installer/authorize
+POST https://auth.matched.laysports.co.uk/installer/authorize
 ```
 
 ### Request
@@ -33,7 +33,7 @@ POST https://api.laymatched.com/installer/authorize
 {
   "registry_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
   "approved_version": "v0.1.1",
-  "registry_url": "registry.laymatched.io"
+  "registry_url": "registry.matched.laysports.co.uk"
 }
 ```
 
@@ -48,18 +48,18 @@ POST https://api.laymatched.com/installer/authorize
 ### Health Check
 
 ```
-GET https://api.laymatched.com/health
+GET https://auth.matched.laysports.co.uk/health
 ```
 
 ### JWKS Endpoint
 
 ```
-GET https://api.laymatched.com/.well-known/jwks.json
+GET https://auth.matched.laysports.co.uk/.well-known/jwks.json
 ```
 
 ## Private Registry
 
-- **URL**: `https://registry.laymatched.io`
+- **URL**: `https://registry.matched.laysports.co.uk`
 - **Auth**: Bearer token (JWT from Auth API)
 - **Scope**: `repository:laymatched-api:pull,repository:laymatched-web:pull`
 - **TTL**: 1 hour
@@ -112,7 +112,7 @@ Only the bcrypt hash is stored in the database.
 ### Prerequisites
 
 - Existing VPS with Docker and Docker Compose
-- Domains: `api.laymatched.com`, `registry.laymatched.io` pointing to VPS IP
+- Domains: `auth.matched.laysports.co.uk`, `registry.matched.laysports.co.uk` pointing to VPS IP
 - Let's Encrypt certificates for both domains
 
 ### Directory Structure on VPS
@@ -144,8 +144,8 @@ cd /opt/laymatched-auth
 docker compose up -d
 
 # Verify
-curl https://api.laymatched.com/health
-curl https://registry.laymatched.io/v2/
+curl https://auth.matched.laysports.co.uk/health
+curl https://registry.matched.laysports.co.uk/v2/
 ```
 
 ### TLS Certificates
@@ -153,16 +153,16 @@ curl https://registry.laymatched.io/v2/
 Place Let's Encrypt certificates in:
 
 ```
-/opt/laymatched-auth/certs/api.laymatched.com/fullchain.pem
-/opt/laymatched-auth/certs/api.laymatched.com/privkey.pem
-/opt/laymatched-auth/certs/registry.laymatched.io/fullchain.pem
-/opt/laymatched-auth/certs/registry.laymatched.io/privkey.pem
+/opt/laymatched-auth/certs/auth.matched.laysports.co.uk/fullchain.pem
+/opt/laymatched-auth/certs/auth.matched.laysports.co.uk/privkey.pem
+/opt/laymatched-auth/certs/registry.matched.laysports.co.uk/fullchain.pem
+/opt/laymatched-auth/certs/registry.matched.laysports.co.uk/privkey.pem
 ```
 
 Or use certbot with nginx:
 
 ```bash
-certbot certonly --nginx -d api.laymatched.com -d registry.laymatched.io
+certbot certonly --nginx -d auth.matched.laysports.co.uk -d registry.matched.laysports.co.uk
 ```
 
 ## CI/CD: Approved Release Publication
@@ -172,7 +172,7 @@ The workflow `.github/workflows/release-to-private-registry.yml` publishes appro
 1. Triggers manually with version tag and SHA
 2. Pulls images from GHCR (staging)
 3. Retags for private registry
-4. Pushes to `registry.laymatched.io`
+4. Pushes to `registry.matched.laysports.co.uk`
 5. Updates `approved_version.txt` on VPS via SSH
 
 Required GitHub Secrets:
@@ -198,7 +198,7 @@ Required GitHub Secrets:
 | `PORT` | 8443 | Auth API internal port |
 | `DB_PATH` | /data/auth-tokens.db | SQLite database path |
 | `APPROVED_VERSION` | v0.1.0 | Current approved release version |
-| `REGISTRY_URL` | registry.laymatched.io | Registry hostname |
+| `REGISTRY_URL` | registry.matched.laysports.co.uk | Registry hostname |
 | `PRIVATE_KEY_PATH` | /data/private.pem | RSA private key |
 | `PUBLIC_KEY_PATH` | /data/public.pem | RSA public key |
 | `RATE_LIMIT_PER_MIN` | 50 | Auth API rate limit per IP |

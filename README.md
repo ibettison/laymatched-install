@@ -145,7 +145,7 @@ Error: Failed to authenticate to LayMatched Container Registry
 ```
 - Verify your LayMatched Installer Token is valid and not expired
 - Token must belong to a customer with active LayMatched access
-- Check network connectivity to `api.laymatched.com` and the registry
+- Check network connectivity to `auth.matched.laysports.co.uk` and the registry
 - Re-run installer/update with a valid token
 
 ### Docker / Compose Unavailable
@@ -204,7 +204,7 @@ Invalid credentials
 ## Known Limitations / Pre-Launch Items
 
 1. **Installer Token Required**: Customers must provide a valid LayMatched Installer Token.
-2. **HTTP Only**: External access is HTTP on port 80. HTTPS and custom hostnames (`nickname.app.laymatched.co.uk`) coming soon.
+2. **HTTP Only**: External access is HTTP on port 80. HTTPS and custom hostnames (`nickname.app.laysports.co.uk`) coming soon.
 3. **No Automatic Backups**: PostgreSQL data in Docker volume; implement backup strategy for production.
 4. **Single-Server Only**: No clustering or HA configuration.
 
