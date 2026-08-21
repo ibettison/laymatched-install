@@ -21,7 +21,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 # Calls LayMatched Auth API to get short-lived registry token and approved version.
 # Sets: REGISTRY_TOKEN, APPROVED_VERSION, REGISTRY_URL
 
-AUTH_API_URL="https://api.laymatched.com/installer/authorize"
+AUTH_API_URL="https://auth.matched.laysports.co.uk/installer/authorize"
 
 # Validate version string: alphanumeric, dots, dashes, underscores only
 validate_version() {

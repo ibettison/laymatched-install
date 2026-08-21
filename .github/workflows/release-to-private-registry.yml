@@ -14,7 +14,7 @@ on:
       registry_url:
         description: 'Private registry URL'
         required: false
-        default: 'registry.laymatched.io'
+        default: 'registry.matched.laysports.co.uk'
         type: string
       app_repo:
         description: 'GHCR namespace (owner) where application images are published (e.g., ibettison)'
@@ -152,7 +152,7 @@ jobs:
             response=$(curl -fsS -X POST \
               -H "Content-Type: application/json" \
               -d "{\"installer_token\": \"${{ secrets.TEST_INSTALLER_TOKEN }}\"}" \
-              "https://api.laymatched.com/installer/authorize")
+              "https://auth.matched.laysports.co.uk/installer/authorize")
             approved_version=$(echo "$response" | jq -r .approved_version)
             if [ "$approved_version" == "${{ inputs.version }}" ]; then
               echo "Approved version confirmed: $approved_version"

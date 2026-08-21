@@ -14,7 +14,7 @@ on:
       registry_url:
         description: 'Private registry URL'
         required: false
-        default: 'registry.laymatched.io'
+        default: 'registry.matched.laysports.co.uk'
         type: string
       app_repo:
         description: 'GHCR namespace (owner) where application images are published (e.g., ibettison)'
@@ -112,7 +112,7 @@ jobs:
           # Exchange owner token for registry push token via Auth API token service
           response=$(curl -fsS -X GET \
             -H "Authorization: Bearer ${{ secrets.OWNER_TOKEN }}" \
-            "https://api.laymatched.com/token?service=registry.laymatched.io&scope=repository:laymatched-api:push,repository:laymatched-web:push")
+            "https://auth.matched.laysports.co.uk/token?service=registry.matched.laysports.co.uk&scope=repository:laymatched-api:push,repository:laymatched-web:push")
           echo "registry_token=$(echo "$response" | jq -r .token)" >> $GITHUB_OUTPUT
           if [ "$(echo "$response" | jq -r .token)" == "null" ] || [ -z "$(echo "$response" | jq -r .token)" ]; then
             echo "Failed to obtain registry token"
@@ -141,13 +141,13 @@ jobs:
           installer_response=$(curl -fsS -X POST \
             -H "Content-Type: application/json" \
             -d "{\"installer_token\": \"${{ secrets.TEST_INSTALLER_TOKEN }}\"}" \
-            "https://api.laymatched.com/installer/authorize")
+            "https://auth.matched.laysports.co.uk/installer/authorize")
           installer_token=$(echo "$installer_response" | jq -r .registry_token)
           
           # Exchange installer token for registry JWT via token service
           token_response=$(curl -fsS -X GET \
             -H "Authorization: Bearer $installer_token" \
-            "https://api.laymatched.com/token?service=registry.laymatched.io&scope=repository:laymatched-api:pull,repository:laymatched-web:pull")
+            "https://auth.matched.laysports.co.uk/token?service=registry.matched.laysports.co.uk&scope=repository:laymatched-api:pull,repository:laymatched-web:pull")
           registry_jwt=$(echo "$token_response" | jq -r .token)
           
           if [ "$registry_jwt" == "null" ] || [ -z "$registry_jwt" ]; then
@@ -184,7 +184,7 @@ jobs:
             response=$(curl -fsS -X POST \
               -H "Content-Type: application/json" \
               -d "{\"installer_token\": \"${{ secrets.TEST_INSTALLER_TOKEN }}\"}" \
-              "https://api.laymatched.com/installer/authorize")
+              "https://auth.matched.laysports.co.uk/installer/authorize")
             approved_version=$(echo "$response" | jq -r .approved_version)
             if [ "$approved_version" == "${{ inputs.version }}" ]; then
               echo "Approved version confirmed: $approved_version"

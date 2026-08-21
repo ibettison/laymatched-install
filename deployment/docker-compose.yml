@@ -8,7 +8,7 @@ services:
     environment:
       - PORT=8443
       - DB_PATH=/data/auth-tokens.db
-      - REGISTRY_URL=registry.laymatched.io
+      - REGISTRY_URL=registry.matched.laysports.co.uk
       - PRIVATE_KEY_PATH=/data/private.pem
       - PUBLIC_KEY_PATH=/data/public.pem
       - REGISTRY_PUBLIC_KEY_PATH=/data/auth-public.pem
@@ -53,9 +53,9 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./deployment/nginx:/etc/nginx/conf.d:ro
-      - ./deployment/certs:/etc/nginx/certs:ro
-      - ./deployment/nginx/laymatched.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx:/etc/nginx/conf.d:ro
+      - ./certs:/etc/nginx/certs:ro
+      - ./nginx/laymatched.conf:/etc/nginx/nginx.conf:ro
     networks:
       - laymatched-internal
       - laymatched-external

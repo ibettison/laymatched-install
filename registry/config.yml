@@ -12,8 +12,8 @@ storage:
     enabled: false
 auth:
   token:
-    realm: https://api.laymatched.com/token
-    service: registry.laymatched.io
+    realm: https://auth.matched.laysports.co.uk/token
+    service: registry.matched.laysports.co.uk
     issuer: laymatched-auth
     rootcertbundle: /certs/auth-cert.pem
 http:
