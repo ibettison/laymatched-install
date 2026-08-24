@@ -35,17 +35,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate and resolve SHA
+      - name: Validate and resolve SHA to immutable commit
         id: sha
         run: |
           if [ -n "${{ inputs.sha }}" ]; then
-            # Validate the supplied SHA/ref exists
-            if ! git cat-file -e "${{ inputs.sha }}" 2>/dev/null; then
-              echo "::error::Supplied SHA/ref '${{ inputs.sha }}' does not exist in repository"
+            # Resolve supplied ref to immutable commit SHA
+            RESOLVED=$(git rev-parse --verify "${{ inputs.sha }}^{commit}" 2>/dev/null || true)
+            if [ -z "$RESOLVED" ]; then
+              echo "::error::Supplied SHA/ref '${{ inputs.sha }}' does not resolve to a commit object"
               exit 1
             fi
-            echo "sha=${{ inputs.sha }}" >> $GITHUB_OUTPUT
+            echo "sha=$RESOLVED" >> $GITHUB_OUTPUT
           else
+            # Default to current workflow commit (already immutable)
             echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
           fi
 

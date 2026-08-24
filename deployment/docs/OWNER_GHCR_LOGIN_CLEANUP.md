@@ -58,17 +58,44 @@ rm /tmp/laymatched-auth-api-v1.0.0.tar
 
 ```bash
 # 1. Verify no GHCR credentials remain locally
-cat ~/.docker/config.json | grep -v ghcr.io || echo "No GHCR credentials found"
+CONFIG_FILE=~/.docker/config.json
+if [ ! -f "$CONFIG_FILE" ]; then
+  echo "PASS: Docker config file does not exist - no GHCR credentials possible"
+elif [ ! -r "$CONFIG_FILE" ]; then
+  echo "FAIL: Cannot read $CONFIG_FILE - cannot verify GHCR credential absence"
+  exit 1
+elif grep -q '"ghcr.io"' "$CONFIG_FILE" 2>/dev/null; then
+  echo "FAIL: GHCR credential entry found in $CONFIG_FILE"
+  exit 1
+else
+  echo "PASS: No GHCR credentials found in $CONFIG_FILE"
+fi
 
 # 2. Verify no credential helper cached GHCR
-docker-credential-gcr list 2>/dev/null | grep ghcr.io || echo "No GHCR in credential helper"
+if docker-credential-gcr list 2>/dev/null | grep -q ghcr.io; then
+  echo "FAIL: GHCR entry found in credential helper"
+  exit 1
+else
+  echo "PASS: No GHCR in credential helper"
+fi
 ```
 
-### VPS Verification (Run as PRIVILEGED USER)
+### VPS Verification (Run as PRIVILEGED USER / root)
 
 ```bash
 # 1. Verify no GHCR credentials in Docker config
-cat /root/.docker/config.json 2>/dev/null | grep -v ghcr.io || echo "No GHCR credentials on VPS"
+CONFIG_FILE=/root/.docker/config.json
+if [ ! -f "$CONFIG_FILE" ]; then
+  echo "PASS: Docker config file does not exist - no GHCR credentials possible"
+elif [ ! -r "$CONFIG_FILE" ]; then
+  echo "FAIL: Cannot read $CONFIG_FILE - cannot verify GHCR credential absence"
+  exit 1
+elif grep -q '"ghcr.io"' "$CONFIG_FILE" 2>/dev/null; then
+  echo "FAIL: GHCR credential entry found in $CONFIG_FILE"
+  exit 1
+else
+  echo "PASS: No GHCR credentials found in $CONFIG_FILE"
+fi
 
 # 2. Verify image not pulled from GHCR by deployment user
 # (laymatched-deploy cannot run docker commands - this is enforced)
