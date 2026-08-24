@@ -1,0 +1,31 @@
+version: 0.1
+log:
+  level: info
+  formatter: json
+  fields:
+    service: registry
+    environment: production
+storage:
+  filesystem:
+    rootdirectory: /var/lib/registry
+  delete:
+    enabled: false
+auth:
+  token:
+    realm: https://auth.matched.laysports.co.uk/token
+    service: registry.matched.laysports.co.uk
+    issuer: laymatched-auth
+    rootcertbundle: /certs/auth-cert.pem
+http:
+  addr: :5000
+  headers:
+    X-Content-Type-Options: [nosniff]
+    X-Frame-Options: [DENY]
+health:
+  storagedriver:
+    enabled: true
+    interval: 10s
+    threshold: 3
+compatibility:
+  schema1:
+    enabled: false

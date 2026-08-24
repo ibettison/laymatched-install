@@ -1,0 +1,115 @@
+name: Build and Publish Auth API Bootstrap Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Bootstrap version tag (e.g., v1.0.0)'
+        required: true
+        type: string
+      sha:
+        description: 'Git SHA to build (defaults to current)'
+        required: false
+        type: string
+      registry_namespace:
+        description: 'GHCR namespace (owner) for published image'
+        required: false
+        default: 'ibettison'
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  attestations: write
+  id-token: write
+
+jobs:
+  build-and-publish:
+    name: Build and Publish Auth API to GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine SHA
+        id: sha
+        run: |
+          if [ -n "${{ inputs.sha }}" ]; then
+            echo "sha=${{ inputs.sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract metadata for Auth API
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ inputs.registry_namespace }}/laymatched-auth-api
+          tags: |
+            type=raw,value=${{ inputs.version }}
+            type=sha,prefix={{branch}}-
+            type=ref,event=branch
+            type=ref,event=pr
+
+      - name: Build and push Auth API image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./auth-api
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify image is pullable
+        run: |
+          docker pull ghcr.io/${{ inputs.registry_namespace }}/laymatched-auth-api:${{ inputs.version }}
+          echo "Auth API bootstrap image published successfully"
+
+      - name: Output image digest
+        id: digest
+        run: |
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/${{ inputs.registry_namespace }}/laymatched-auth-api:${{ inputs.version }})
+          echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
+          echo "Image digest: ${DIGEST}"
+
+      - name: Summary
+        run: |
+          echo "## Auth API Bootstrap Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | ghcr.io/${{ inputs.registry_namespace }}/laymatched-auth-api |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | ${{ inputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Digest | ${{ steps.digest.outputs.digest }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SHA | ${{ steps.sha.outputs.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Namespace | ${{ inputs.registry_namespace }} |" >> $GITHUB_STEP_SUMMARY
+
+  notify:
+    name: Notify
+    needs: build-and-publish
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Report status
+        run: |
+          if [ "${{ needs.build-and-publish.result }}" == "success" ]; then
+            echo "✅ Auth API bootstrap image ${{ github.event.inputs.version }} published to GHCR"
+          else
+            echo "❌ Auth API bootstrap image ${{ github.event.inputs.version }} failed"
+            exit 1
+          fi
