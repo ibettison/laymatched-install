@@ -95,7 +95,10 @@ call_auth_api() {
 
     # Build JSON safely using python3 to avoid injection issues
     local json_payload
-    json_payload=$(python3 -c "import json, sys; print(json.dumps({'installer_token': sys.argv[1])})" "$installer_token")
+    json_payload=$(python3 -c '
+import json, sys
+print(json.dumps({"installer_token": sys.argv[1]}))
+' "$installer_token")
 
     local response
     if ! response=$(curl -fsS -X POST \
