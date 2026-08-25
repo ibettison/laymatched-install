@@ -9,7 +9,6 @@ import (
 	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -480,7 +479,7 @@ func hashToken(token string) (string, error) {
 
 func tokenSHA256(token string) string {
 	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func verifyTokenHash(token, hash string) bool {

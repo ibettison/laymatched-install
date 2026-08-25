@@ -7,7 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"database/sql"
-	"encoding/hex"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"net/http"
@@ -71,7 +71,7 @@ func hashTokenForTest(t *testing.T, token string) string {
 
 func insertTestToken(t *testing.T, db *sql.DB, customerID, token string, revoked, expired bool) int64 {
 	bcryptHash := hashTokenForTest(t, token)
-	sha256Hash := tokenSHA256ForTest(t, token)
+	sha256Hash := tokenSHA256(token)
 	var revokedAt, expiresAt *time.Time
 	now := time.Now()
 	if revoked {
@@ -93,9 +93,35 @@ func insertTestToken(t *testing.T, db *sql.DB, customerID, token string, revoked
 	return id
 }
 
-func tokenSHA256ForTest(t *testing.T, token string) string {
+// TestTokenSHA256Consistency verifies that the token identifier is consistent
+// with the token-tool's base64 representation.
+func TestTokenSHA256Consistency(t *testing.T) {
+	token := "lm_inst_testtoken12345678901234"
+	
+	// Expected hash (computed using base64.RawURLEncoding on SHA256 of token)
 	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
+	expected := base64.RawURLEncoding.EncodeToString(sum[:])
+	
+	actual := tokenSHA256(token)
+	
+	if actual != expected {
+		t.Errorf("Expected %s, got %s", expected, actual)
+	}
+	
+	if len(actual) != 43 {
+		t.Errorf("Expected length 43, got %d", len(actual))
+	}
+
+	// Verify deterministic
+	if tokenSHA256(token) != actual {
+		t.Errorf("Not deterministic")
+	}
+
+	// Verify different
+	token2 := "lm_inst_othertoken1234567890123"
+	if tokenSHA256(token2) == actual {
+		t.Errorf("Collision")
+	}
 }
 
 func TestAuthorizeValidToken(t *testing.T) {
