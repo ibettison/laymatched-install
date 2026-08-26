@@ -20,6 +20,7 @@ services:
       - auth-data:/data
     networks:
       - laymatched-internal
+      - laymatched-host-access
     ports:
       - "127.0.0.1:8443:8443"
     healthcheck:
@@ -41,10 +42,11 @@ services:
       - /opt/laymatched-auth/data/registry-config.yml:/etc/docker/registry/config.yml:ro
     networks:
       - laymatched-internal
+      - laymatched-host-access
     ports:
       - "127.0.0.1:5000:5000"
     healthcheck:
-      test: ["CMD", "sh", "-c", "output=$(wget --spider -S http://localhost:5000/v2/ 2>&1); echo \"$output\" | grep -qE \"HTTP/1\\.[01] (200|401)\" && (echo \"$output\" | grep -qi \"www-authenticate:.*bearer\" || echo \"$output\" | grep -q \"HTTP/1\\.[01] 200\")"]
+      test: ["CMD", "sh", "-c", "output=$$(wget --spider -S http://localhost:5000/v2/ 2>&1); echo \"$$output\" | grep -qE \"HTTP/1\\.[01] (200|401)\" && (echo \"$$output\" | grep -qi \"www-authenticate:.*bearer\" || echo \"$$output\" | grep -q \"HTTP/1\\.[01] 200\")"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -68,3 +70,7 @@ networks:
   laymatched-internal:
     driver: bridge
     internal: true
+  # Docker 29 does not publish host ports for containers attached only to an
+  # internal network. This bridge enables the loopback-only host nginx path.
+  laymatched-host-access:
+    driver: bridge
