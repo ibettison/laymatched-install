@@ -53,7 +53,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx:/etc/nginx/conf.d:ro
+      # Mount only the Docker nginx config. This directory also contains
+      # host-nginx site files, which are not valid under /etc/nginx/conf.d.
       - ./certs:/etc/nginx/certs:ro
       - ./nginx/laymatched.conf:/etc/nginx/nginx.conf:ro
     networks:
