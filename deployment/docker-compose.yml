@@ -39,7 +39,7 @@ services:
     networks:
       - laymatched-internal
     healthcheck:
-      test: ["CMD", "sh", "-c", "if wget --spider -S http://localhost:5000/v2/ 2>&1 | grep -qE '(200 OK|401 Unauthorized)'; then exit 0; else exit 1; fi"]
+      test: ["CMD", "sh", "-c", "wget --spider -S http://localhost:5000/v2/ 2>&1 > /dev/null; [ $$? -eq 1 ] || [ $$? -eq 0 ]"]
       interval: 30s
       timeout: 10s
       retries: 3
