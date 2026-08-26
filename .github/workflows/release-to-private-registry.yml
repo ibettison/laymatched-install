@@ -4,27 +4,22 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Approved version tag (e.g., v0.1.1)'
+        description: 'Immutable release tag (for example, v0.1.0)'
         required: true
         type: string
       sha:
-        description: 'Git SHA to release (defaults to current)'
-        required: false
+        description: 'Exact 40-character ibettison/layMatchedBetting commit SHA'
+        required: true
         type: string
       registry_url:
         description: 'Private registry URL'
         required: false
         default: 'registry.matched.laysports.co.uk'
         type: string
-      app_repo:
-        description: 'GHCR namespace (owner) where application images are published (e.g., ibettison)'
-        required: false
-        default: 'ibettison'
-        type: string
       update_approved_version:
-        description: 'Update approved version on VPS after successful publish'
+        description: 'Update approved version only after both images verify'
         required: false
-        default: 'true'
+        default: true
         type: boolean
 
 permissions:
@@ -32,151 +27,156 @@ permissions:
 
 jobs:
   publish:
-    name: Publish to Private Registry
+    name: Build and publish exact application revision
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment: production
-
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
     steps:
-      - name: Checkout repository
+      - name: Validate immutable release inputs
+        shell: bash
+        env:
+          APPLICATION_REPO_TOKEN: ${{ secrets.APPLICATION_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          requested_sha='${{ inputs.sha }}'
+          version='${{ inputs.version }}'
+          registry_url='${{ inputs.registry_url }}'
+          [[ "$requested_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'SHA must be 40 lowercase hex characters'; exit 1; }
+          [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([._-][0-9A-Za-z.-]+)?$ ]] || { echo 'Invalid release version'; exit 1; }
+          [[ "$registry_url" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || { echo 'Invalid Registry URL'; exit 1; }
+          test -n "$APPLICATION_REPO_TOKEN" || { echo 'APPLICATION_REPO_TOKEN is required'; exit 1; }
+
+      - name: Checkout exact LayMatched application revision
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          repository: ibettison/layMatchedBetting
+          token: ${{ secrets.APPLICATION_REPO_TOKEN }}
+          ref: ${{ inputs.sha }}
+          fetch-depth: 1
+          path: application
+          persist-credentials: false
+
+      - name: Verify exact application HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          requested_sha='${{ inputs.sha }}'
+          actual_sha="$(git -C application rev-parse HEAD)"
+          test "$actual_sha" = "$requested_sha" || { echo 'Checked-out HEAD does not match requested SHA'; exit 1; }
+          git -C application cat-file -e "${requested_sha}^{commit}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR (source)
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Determine SHA
-        id: sha
+      - name: Build API from exact application SHA
         run: |
-          if [ -n "${{ inputs.sha }}" ]; then
-            echo "sha=${{ inputs.sha }}" >> $GITHUB_OUTPUT
-          else
-            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
-          fi
+          docker build \
+            --label 'org.opencontainers.image.revision=${{ inputs.sha }}' \
+            --label 'org.opencontainers.image.source=https://github.com/ibettison/layMatchedBetting' \
+            --tag '${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}' \
+            application/backend
 
-      - name: Validate source image coordinates
+      - name: Build Web from exact application SHA
+        run: |
+          docker build \
+            --label 'org.opencontainers.image.revision=${{ inputs.sha }}' \
+            --label 'org.opencontainers.image.source=https://github.com/ibettison/layMatchedBetting' \
+            --tag '${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}' \
+            application/frontend
+
+      - name: Verify both local images have the requested revision
+        shell: bash
         run: |
           set -euo pipefail
-          app_repo="${{ inputs.app_repo }}"
-          # The LayMatched application release process publishes user-level GHCR
-          # packages (verified against ibettison/layMatchedBetting runs):
-          #   ghcr.io/ibettison/laymatched-api
-          #   ghcr.io/ibettison/laymatched-web
-          # GHCR normalizes names to lowercase, so the namespace must be a
-          # single-segment owner (no repo sub-path).
-          ns="${app_repo,,}"
-          case "${ns}" in
-            */*) echo "app_repo must be a single-segment GHCR namespace (owner), got: ${app_repo}"; exit 1 ;;
-            *) ;;
-          esac
-          api_ref="ghcr.io/${ns}/laymatched-api"
-          web_ref="ghcr.io/${ns}/laymatched-web"
-          echo "Resolved API image: ${api_ref}"
-          echo "Resolved Web image: ${web_ref}"
-          echo "api_image=${api_ref}" >> $GITHUB_OUTPUT
-          echo "web_image=${web_ref}" >> $GITHUB_OUTPUT
-          if [ "${app_repo}" == "ibettison" ]; then
-            [ "${api_ref}" == "ghcr.io/ibettison/laymatched-api" ] \
-              || { echo "Default API coordinate mismatch: ${api_ref}"; exit 1; }
-            [ "${web_ref}" == "ghcr.io/ibettison/laymatched-web" ] \
-              || { echo "Default Web coordinate mismatch: ${web_ref}"; exit 1; }
-          fi
-          echo "Source coordinates validated"
+          requested_sha='${{ inputs.sha }}'
+          api_sha="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' '${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}')"
+          web_sha="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' '${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}')"
+          test "$api_sha" = "$requested_sha"
+          test "$web_sha" = "$requested_sha"
+          test "$api_sha" = "$web_sha"
 
-      - name: Verify source API image exists
-        run: |
-          docker pull ghcr.io/${{ inputs.app_repo }}/laymatched-api:${{ inputs.version }}
-          docker pull ghcr.io/${{ inputs.app_repo }}/laymatched-web:${{ inputs.version }}
-
-      - name: Retag API image for private registry
-        run: |
-          docker tag ghcr.io/${{ inputs.app_repo }}/laymatched-api:${{ inputs.version }} \
-            ${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}
-
-      - name: Retag Web image for private registry
-        run: |
-          docker tag ghcr.io/${{ inputs.app_repo }}/laymatched-web:${{ inputs.version }} \
-            ${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}
-
-      - name: Log in to Private Registry (push) with owner credential
+      - name: Log in to private Registry for push
         uses: docker/login-action@v3
         with:
           registry: ${{ inputs.registry_url }}
           username: laymatched-owner
           password: ${{ secrets.OWNER_TOKEN }}
 
-      - name: Push API image to private registry
-        run: |
-          docker push ${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}
+      - name: Push API image
+        run: docker push '${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}'
 
-      - name: Push Web image to private registry
-        run: |
-          docker push ${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}
+      - name: Push Web image
+        run: docker push '${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}'
 
-      - name: Verify images are pullable from private registry
+      - name: Remove local release tags before pull verification
         run: |
-          # Test pull with installer token via Docker login (let Docker follow Bearer challenge)
-          docker login ${{ inputs.registry_url }} -u laymatched-installer --password-stdin <<< "${{ secrets.TEST_INSTALLER_TOKEN }}"
-          
-          docker pull ${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}
-          docker pull ${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}
-          
-          echo "Images verified pullable"
+          docker image rm \
+            '${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}' \
+            '${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}'
+
+      - name: Log in to private Registry for pull verification
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry_url }}
+          username: laymatched-installer
+          password: ${{ secrets.TEST_INSTALLER_TOKEN }}
+
+      - name: Pull and verify both private images
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_ref='${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}'
+          web_ref='${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}'
+          requested_sha='${{ inputs.sha }}'
+          docker pull "$api_ref"
+          docker pull "$web_ref"
+          api_sha="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$api_ref")"
+          web_sha="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$web_ref")"
+          test "$api_sha" = "$requested_sha"
+          test "$web_sha" = "$requested_sha"
+          test "$api_sha" = "$web_sha"
 
       - name: Update approved version on VPS
-        if: ${{ inputs.update_approved_version == 'true' && secrets.VPS_HOST != '' }}
+        if: ${{ success() && inputs.update_approved_version == true && env.VPS_HOST != '' }}
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            echo "${{ inputs.version }}" | sudo tee /opt/laymatched-auth/data/approved_version.txt
-            echo "Approved version updated to ${{ inputs.version }}"
+            sudo docker exec -u 0 \
+              -e APPROVED_VERSION='${{ inputs.version }}' \
+              laymatched-auth-api \
+              sh -c 'printf "%s\n" "$APPROVED_VERSION" > /data/approved_version.txt'
+            echo 'Approved version updated after both images verified'
 
       - name: Verify approved version is live
-        if: ${{ inputs.update_approved_version == 'true' && secrets.VPS_HOST != '' }}
+        if: ${{ success() && inputs.update_approved_version == true && env.VPS_HOST != '' }}
+        shell: bash
+        env:
+          TEST_INSTALLER_TOKEN: ${{ secrets.TEST_INSTALLER_TOKEN }}
         run: |
-          # Poll for file watcher to pick up change (max 30 seconds, poll every 2 seconds)
-          max_attempts=15
-          attempt=0
-          while [ $attempt -lt $max_attempts ]; do
-            response=$(curl -fsS -X POST \
-              -H "Content-Type: application/json" \
-              -d "{\"installer_token\": \"${{ secrets.TEST_INSTALLER_TOKEN }}\"}" \
-              "https://auth.matched.laysports.co.uk/installer/authorize")
-            approved_version=$(echo "$response" | jq -r .approved_version)
-            if [ "$approved_version" == "${{ inputs.version }}" ]; then
-              echo "Approved version confirmed: $approved_version"
-              exit 0
-            fi
-            attempt=$((attempt + 1))
-            echo "Waiting for approved version to propagate... (attempt $attempt/$max_attempts)"
+          set -euo pipefail
+          for attempt in $(seq 1 15); do
+            payload="$(jq -cn --arg token "$TEST_INSTALLER_TOKEN" '{installer_token: $token}')"
+            response="$(curl -fsS -X POST -H 'Content-Type: application/json' --data "$payload" 'https://auth.matched.laysports.co.uk/installer/authorize')"
+            approved_version="$(jq -r '.approved_version' <<< "$response")"
+            [ "$approved_version" = '${{ inputs.version }}' ] && exit 0
+            echo "Waiting for approved version ($attempt/15)"
             sleep 2
           done
-          echo "ERROR: Approved version not updated after $max_attempts attempts. Expected ${{ inputs.version }}, got $approved_version"
+          echo 'Approved version verification failed' >&2
           exit 1
 
       - name: Summary
+        if: ${{ success() }}
         run: |
-          echo "## Release Published" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Image | Tag |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|-----|" >> $GITHUB_STEP_SUMMARY
-          echo "| laymatched-api | ${{ inputs.version }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| laymatched-web | ${{ inputs.version }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Registry: ${{ inputs.registry_url }}" >> $GITHUB_STEP_SUMMARY
-          echo "Source GHCR namespace: ${{ inputs.app_repo }}" >> $GITHUB_STEP_SUMMARY
-          echo "SHA: ${{ steps.sha.outputs.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo '## Exact-SHA release published' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Application: ibettison/layMatchedBetting@${{ inputs.sha }}' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Release: ${{ inputs.version }}' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Both private images built, pushed, pulled, and verified.' >> "$GITHUB_STEP_SUMMARY"
 
   notify:
     name: Notify
@@ -186,9 +186,9 @@ jobs:
     steps:
       - name: Report status
         run: |
-          if [ "${{ needs.publish.result }}" == "success" ]; then
-            echo "✅ Release ${{ github.event.inputs.version }} published successfully"
+          if [ '${{ needs.publish.result }}' = 'success' ]; then
+            echo 'Release workflow completed successfully'
           else
-            echo "❌ Release ${{ github.event.inputs.version }} failed"
+            echo 'Release failed; approved_version was not advanced'
             exit 1
           fi
