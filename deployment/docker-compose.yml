@@ -38,12 +38,12 @@ services:
       - auth-data:/certs:ro
     networks:
       - laymatched-internal
-      healthcheck:
-        test: ["CMD", "sh", "-c", "wget -q -O /dev/null -S --spider http://localhost:5000/v2/ 2>&1 | grep -E '(200 OK|401 Unauthorized)' > /dev/null"]
-        interval: 30s
-        timeout: 10s
-        retries: 3
-        start_period: 20s
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -q -O /dev/null -S --spider http://localhost:5000/v2/ 2>&1 | grep -E '(200 OK|401 Unauthorized)' > /dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   nginx:
     image: nginx:1.27-alpine
