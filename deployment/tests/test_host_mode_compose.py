@@ -60,9 +60,11 @@ class HostModeComposeTest(unittest.TestCase):
             self.assertIn('echo "$$output"', command)
             self.assertNotIn('echo ""', command)
 
-    def test_registry_healthcheck_accepts_401_bearer_and_200(self):
+    def test_registry_healthcheck_accepts_401_without_headers_and_200(self):
         for config in self.configs:
-            self.assertEqual(self.run_healthcheck(config, self.response_401(), 1), 0)
+            self.assertEqual(
+                self.run_healthcheck(config, "HTTP/1.1 401 Unauthorized", 1), 0
+            )
             self.assertEqual(self.run_healthcheck(config, "HTTP/1.1 200 OK", 0), 0)
 
     def test_registry_healthcheck_fails_when_unreachable(self):
@@ -78,13 +80,6 @@ class HostModeComposeTest(unittest.TestCase):
             config["services"]["auth-api"]["image"] = "AUTH_IMAGE"
             config["services"]["registry"]["image"] = "REGISTRY_IMAGE"
         self.assertEqual(bootstrap, production)
-
-    @staticmethod
-    def response_401() -> str:
-        return (
-            "HTTP/1.1 401 Unauthorized\n"
-            'WWW-Authenticate: Bearer realm="https://auth.example/token"'
-        )
 
     @staticmethod
     def run_healthcheck(config: dict, wget_output: str, wget_status: int) -> int:
