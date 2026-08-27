@@ -1,0 +1,987 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LayMatched Customer Activation API",
+    "version": "1.0.0-gate2a",
+    "description": "Authoritative Gate 2A integration contract. This contract defines interfaces only; it does not implement licensing, DNS, HTTPS provisioning, onboarding, or MFA."
+  },
+  "servers": [
+    {
+      "url": "https://auth.matched.laysports.co.uk",
+      "description": "Production authority; implementation is outside Gate 2A"
+    }
+  ],
+  "tags": [
+    { "name": "Activation" },
+    { "name": "Nickname" },
+    { "name": "Profile" },
+    { "name": "Network" },
+    { "name": "HTTPS" },
+    { "name": "MFA status" }
+  ],
+  "paths": {
+    "/v1/activations": {
+      "post": {
+        "operationId": "bootstrapActivation",
+        "summary": "Create or resume an activation from an installer credential",
+        "description": "The installer credential is supplied only by the local installer/backend. It must never be exposed to browser JavaScript. Customer identity is resolved exclusively from this credential, not from profile fields.",
+        "tags": ["Activation"],
+        "security": [
+          { "InstallerCredential": [] }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/BootstrapRequest" },
+              "example": {
+                "installation_id": "71f7713c-95b6-4d70-98f4-dbb60ccfd728",
+                "installation_public_key": "MCowBQYDK2VwAyEAG2V2QX14YmFzZTY0dXJsLWtleS1leGFtcGxl",
+                "app_version": "v0.1.1",
+                "public_ipv4": "203.0.113.10"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Existing activation resumed idempotently",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BootstrapResponse" }
+              }
+            }
+          },
+          "201": {
+            "description": "Activation created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BootstrapResponse" },
+                "example": {
+                  "activation_id": "a684d7da-70e1-439f-9790-1894ee1a7285",
+                  "customer_id": "cus_opaque_7f2a",
+                  "access_token": "short-lived-jwt",
+                  "expires_in": 900,
+                  "status": "authorized",
+                  "membership": {
+                    "licence_status": "active",
+                    "subscription_status": "active",
+                    "tier": "founder",
+                    "founding_member": true,
+                    "current_period_end": "2026-09-27T00:00:00Z",
+                    "cancel_at_period_end": false
+                  },
+                  "profile_required": true,
+                  "next_action": "reserve_nickname",
+                  "server_time": "2026-08-27T12:00:00Z"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/InvalidCredential" },
+          "403": { "$ref": "#/components/responses/LicenceInactive" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/activations/{activation_id}": {
+      "get": {
+        "operationId": "getActivation",
+        "summary": "Get activation, entitlement, and provisioning status",
+        "tags": ["Activation"],
+        "security": [
+          {
+            "ActivationToken": [],
+            "InstallationSignature": []
+          }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/ActivationId" },
+          { "$ref": "#/components/parameters/SignatureTimestamp" },
+          { "$ref": "#/components/parameters/SignatureNonce" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current activation state",
+            "headers": {
+              "ETag": { "schema": { "type": "string" } }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActivationStatus" },
+                "example": {
+                  "activation_id": "a684d7da-70e1-439f-9790-1894ee1a7285",
+                  "installation_id": "71f7713c-95b6-4d70-98f4-dbb60ccfd728",
+                  "status": "mfa_pending",
+                  "membership": {
+                    "licence_status": "active",
+                    "subscription_status": "active",
+                    "tier": "founder",
+                    "founding_member": true,
+                    "current_period_end": "2026-09-27T00:00:00Z",
+                    "cancel_at_period_end": false
+                  },
+                  "profile": {
+                    "complete": true,
+                    "full_name": "Example Customer",
+                    "town_city": "York",
+                    "country_code": "GB"
+                  },
+                  "nickname": "winning-way",
+                  "hostname": "winning-way.matched.laysports.co.uk",
+                  "dns": {
+                    "status": "ready",
+                    "last_changed_at": "2026-08-27T12:05:00Z",
+                    "last_error": null,
+                    "retry_after": null
+                  },
+                  "https": {
+                    "status": "verified",
+                    "verified_at": "2026-08-27T12:10:00Z",
+                    "certificate_not_after": "2026-11-25T00:00:00Z",
+                    "last_error": null,
+                    "retry_after": null
+                  },
+                  "mfa": {
+                    "enabled": false,
+                    "method": null,
+                    "verified_at": null,
+                    "recovery_codes_generated": false
+                  },
+                  "next_action": "configure_mfa",
+                  "updated_at": "2026-08-27T12:10:00Z",
+                  "version": 6
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/InvalidCredential" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/activations/{activation_id}/nickname-availability": {
+      "post": {
+        "operationId": "checkNicknameAvailability",
+        "summary": "Perform an advisory nickname availability check",
+        "description": "Availability is advisory. Only a successful transactional reservation grants ownership.",
+        "tags": ["Nickname"],
+        "security": [
+          {
+            "ActivationToken": [],
+            "InstallationSignature": []
+          }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/ActivationId" },
+          { "$ref": "#/components/parameters/SignatureTimestamp" },
+          { "$ref": "#/components/parameters/SignatureNonce" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/NicknameAvailabilityRequest" },
+              "example": { "nickname": "winning-way" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Advisory availability result",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NicknameAvailabilityResponse" },
+                "example": {
+                  "nickname": "winning-way",
+                  "available": true,
+                  "reason": null,
+                  "suggestions": []
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/InvalidCredential" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/v1/activations/{activation_id}/nickname-reservations": {
+      "post": {
+        "operationId": "reserveNickname",
+        "summary": "Transactionally reserve a customer nickname",
+        "tags": ["Nickname"],
+        "security": [
+          {
+            "ActivationToken": [],
+            "InstallationSignature": []
+          }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/ActivationId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/SignatureTimestamp" },
+          { "$ref": "#/components/parameters/SignatureNonce" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/NicknameReservationRequest" },
+              "example": {
+                "nickname": "winning-way",
+                "public_ipv4": "203.0.113.10"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Nickname reserved and DNS reconciliation queued",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NicknameReservationResponse" },
+                "example": {
+                  "reservation_id": "7cd09dc3-c4c4-42df-bb5f-c9223483153b",
+                  "nickname": "winning-way",
+                  "hostname": "winning-way.matched.laysports.co.uk",
+                  "status": "dns_pending",
+                  "reservation_expires_at": "2026-08-27T12:15:00Z",
+                  "retry_after": 5
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/InvalidCredential" },
+          "403": { "$ref": "#/components/responses/LicenceInactive" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/activations/{activation_id}/profile": {
+      "patch": {
+        "operationId": "updateCustomerProfile",
+        "summary": "Enrich the authenticated customer's central profile",
+        "description": "Profile fields enrich the customer already resolved from installation identity; they never select or replace that identity.",
+        "tags": ["Profile"],
+        "security": [
+          {
+            "ActivationToken": [],
+            "InstallationSignature": []
+          }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/ActivationId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/SignatureTimestamp" },
+          { "$ref": "#/components/parameters/SignatureNonce" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProfileUpdateRequest" },
+              "example": {
+                "full_name": "Example Customer",
+                "town_city": "York",
+                "country_code": "GB"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Profile updated",
+            "headers": {
+              "ETag": { "schema": { "type": "string" } }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProfileStatus" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/InvalidCredential" },
+          "403": { "$ref": "#/components/responses/LicenceInactive" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/v1/activations/{activation_id}/network": {
+      "put": {
+        "operationId": "updateActivationNetwork",
+        "summary": "Submit signed network state and reachability proof",
+        "description": "The central implementation validates public routability and proof before reconciling DNS. Gate 2A defines only the interface.",
+        "tags": ["Network"],
+        "security": [
+          {
+            "ActivationToken": [],
+            "InstallationSignature": []
+          }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/ActivationId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/SignatureTimestamp" },
+          { "$ref": "#/components/parameters/SignatureNonce" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/NetworkUpdateRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Network state already reconciled",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DnsStatus" }
+              }
+            }
+          },
+          "202": {
+            "description": "Network proof or DNS reconciliation pending",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DnsStatus" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/InvalidCredential" },
+          "403": { "$ref": "#/components/responses/LicenceInactive" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/activations/{activation_id}/https-proof": {
+      "post": {
+        "operationId": "reportHttpsProof",
+        "summary": "Report local certificate metadata for independent verification",
+        "description": "Only public certificate metadata is accepted. No ACME account key, certificate private key, or DNS credential may be submitted.",
+        "tags": ["HTTPS"],
+        "security": [
+          {
+            "ActivationToken": [],
+            "InstallationSignature": []
+          }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/ActivationId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/SignatureTimestamp" },
+          { "$ref": "#/components/parameters/SignatureNonce" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/HttpsProofRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "HTTPS already independently verified",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HttpsStatus" }
+              }
+            }
+          },
+          "202": {
+            "description": "Independent HTTPS verification pending",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HttpsStatus" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/InvalidCredential" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/v1/activations/{activation_id}/mfa-status": {
+      "put": {
+        "operationId": "reportMfaStatus",
+        "summary": "Report locally verified MFA status only",
+        "description": "The TOTP secret, OTP values, provisioning URI, QR payload, recovery codes, and recovery-code hashes are forbidden. The local service verifies MFA and reports only status metadata.",
+        "tags": ["MFA status"],
+        "security": [
+          {
+            "ActivationToken": [],
+            "InstallationSignature": []
+          }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/ActivationId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/SignatureTimestamp" },
+          { "$ref": "#/components/parameters/SignatureNonce" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/MfaStatusUpdateRequest" },
+              "example": {
+                "enabled": true,
+                "method": "totp",
+                "verified_at": "2026-08-27T12:15:00Z",
+                "recovery_codes_generated": true,
+                "local_security_version": 1
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MFA status accepted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MfaStatus" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/InvalidCredential" },
+          "403": { "$ref": "#/components/responses/LicenceInactive" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/v1/activations/{activation_id}/complete": {
+      "post": {
+        "operationId": "completeActivation",
+        "summary": "Complete activation after all central and local gates pass",
+        "description": "The local application establishes its own authenticated session after completion. The central service does not issue a private application session.",
+        "tags": ["Activation"],
+        "security": [
+          {
+            "ActivationToken": [],
+            "InstallationSignature": []
+          }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/ActivationId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/SignatureTimestamp" },
+          { "$ref": "#/components/parameters/SignatureNonce" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ActivationCompletionRequest" },
+              "example": { "acknowledge_terms": true }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Previously completed activation returned idempotently",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActivationCompletionResponse" }
+              }
+            }
+          },
+          "201": {
+            "description": "Activation completed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActivationCompletionResponse" },
+                "example": {
+                  "activation_id": "a684d7da-70e1-439f-9790-1894ee1a7285",
+                  "status": "active",
+                  "hostname": "winning-way.matched.laysports.co.uk",
+                  "activated_at": "2026-08-27T12:16:00Z"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/InvalidCredential" },
+          "403": { "$ref": "#/components/responses/LicenceInactive" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ActivationIncomplete" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "InstallerCredential": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque installer credential",
+        "description": "Bootstrap credential used only by the installer or local backend; never exposed to browser JavaScript."
+      },
+      "ActivationToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Short-lived activation-scoped access token."
+      },
+      "InstallationSignature": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Installation-Signature",
+        "description": "Base64url Ed25519 signature over the canonical method, path, body hash, X-Signature-Timestamp, and X-Signature-Nonce."
+      }
+    },
+    "parameters": {
+      "ActivationId": {
+        "name": "activation_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "uuid" }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "UUID scoped to installation and operation. Reuse with an identical request replays the original response; reuse with a different request returns conflict.",
+        "schema": { "type": "string", "format": "uuid" }
+      },
+      "SignatureTimestamp": {
+        "name": "X-Signature-Timestamp",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string", "format": "date-time" }
+      },
+      "SignatureNonce": {
+        "name": "X-Signature-Nonce",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string", "minLength": 16, "maxLength": 128 }
+      },
+      "IfMatch": {
+        "name": "If-Match",
+        "in": "header",
+        "required": true,
+        "description": "ETag returned by the latest activation status response.",
+        "schema": { "type": "string" }
+      }
+    },
+    "schemas": {
+      "ActivationState": {
+        "type": "string",
+        "enum": [
+          "authorized",
+          "nickname_reserved",
+          "dns_pending",
+          "dns_ready",
+          "https_pending",
+          "profile_pending",
+          "mfa_pending",
+          "active",
+          "retry_pending",
+          "suspended",
+          "cancelled",
+          "deactivated",
+          "nickname_quarantined"
+        ]
+      },
+      "DnsState": {
+        "type": "string",
+        "enum": ["not_requested", "pending", "ready", "failed", "removed"]
+      },
+      "HttpsState": {
+        "type": "string",
+        "enum": ["not_requested", "pending", "verified", "failed"]
+      },
+      "LicenceStatus": {
+        "type": "string",
+        "enum": ["active", "past_due", "suspended", "cancelled", "expired"]
+      },
+      "NextAction": {
+        "type": ["string", "null"],
+        "enum": [
+          "reserve_nickname",
+          "wait_for_dns",
+          "configure_https",
+          "complete_profile",
+          "configure_mfa",
+          "complete_activation",
+          "retry",
+          "contact_support",
+          null
+        ]
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "invalid_credential",
+          "expired_credential",
+          "licence_inactive",
+          "activation_not_found",
+          "installation_limit_reached",
+          "nickname_invalid",
+          "nickname_unavailable",
+          "nickname_reserved",
+          "dns_pending",
+          "dns_failed",
+          "https_pending",
+          "https_failed",
+          "profile_incomplete",
+          "mfa_incomplete",
+          "activation_incomplete",
+          "conflict",
+          "idempotent_replay",
+          "idempotency_conflict",
+          "version_conflict",
+          "invalid_signature",
+          "replay_detected",
+          "validation_failed",
+          "rate_limited",
+          "internal_error"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["error", "message", "correlation_id", "retryable"],
+        "properties": {
+          "error": { "$ref": "#/components/schemas/ErrorCode" },
+          "message": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "correlation_id": { "type": "string", "minLength": 8, "maxLength": 128 },
+          "retryable": { "type": "boolean" },
+          "retry_after": { "type": ["integer", "null"], "minimum": 1 },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "BootstrapRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["installation_id", "installation_public_key", "app_version"],
+        "properties": {
+          "installation_id": { "type": "string", "format": "uuid" },
+          "installation_public_key": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 256,
+            "description": "Base64url-encoded Ed25519 public key. The private key remains on the VPS."
+          },
+          "app_version": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+          "public_ipv4": { "type": "string", "format": "ipv4" },
+          "public_ipv6": { "type": "string", "format": "ipv6" }
+        }
+      },
+      "BootstrapResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["activation_id", "customer_id", "access_token", "expires_in", "status", "membership", "profile_required", "next_action", "server_time"],
+        "properties": {
+          "activation_id": { "type": "string", "format": "uuid" },
+          "customer_id": { "type": "string", "minLength": 1 },
+          "access_token": { "type": "string", "minLength": 1 },
+          "expires_in": { "type": "integer", "minimum": 60, "maximum": 3600 },
+          "status": { "$ref": "#/components/schemas/ActivationState" },
+          "membership": { "$ref": "#/components/schemas/Membership" },
+          "profile_required": { "type": "boolean" },
+          "nickname": { "type": ["string", "null"] },
+          "hostname": { "type": ["string", "null"], "format": "hostname" },
+          "next_action": { "$ref": "#/components/schemas/NextAction" },
+          "server_time": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Membership": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["licence_status", "subscription_status", "tier", "founding_member", "cancel_at_period_end"],
+        "properties": {
+          "licence_status": { "$ref": "#/components/schemas/LicenceStatus" },
+          "subscription_status": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "tier": { "type": ["string", "null"], "maxLength": 64 },
+          "founding_member": { "type": "boolean" },
+          "current_period_start": { "type": ["string", "null"], "format": "date-time" },
+          "current_period_end": { "type": ["string", "null"], "format": "date-time" },
+          "cancel_at_period_end": { "type": "boolean" },
+          "cancelled_at": { "type": ["string", "null"], "format": "date-time" }
+        },
+        "description": "Safe entitlement metadata only. Stripe customer/subscription identifiers and Stripe credentials are never returned."
+      },
+      "ProfileStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["complete"],
+        "properties": {
+          "complete": { "type": "boolean" },
+          "full_name": { "type": ["string", "null"], "minLength": 1, "maxLength": 120 },
+          "town_city": { "type": ["string", "null"], "minLength": 1, "maxLength": 120 },
+          "country_code": { "type": ["string", "null"], "pattern": "^[A-Z]{2}$" },
+          "completed_at": { "type": ["string", "null"], "format": "date-time" }
+        }
+      },
+      "ProfileUpdateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["full_name", "town_city", "country_code"],
+        "properties": {
+          "full_name": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "town_city": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "country_code": { "type": "string", "pattern": "^[A-Z]{2}$" }
+        },
+        "description": "Enrichment only. Email and customer identifiers are deliberately absent."
+      },
+      "NicknameAvailabilityRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["nickname"],
+        "properties": {
+          "nickname": { "$ref": "#/components/schemas/Nickname" }
+        }
+      },
+      "NicknameAvailabilityResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["nickname", "available", "reason", "suggestions"],
+        "properties": {
+          "nickname": { "$ref": "#/components/schemas/Nickname" },
+          "available": { "type": "boolean" },
+          "reason": {
+            "type": ["string", "null"],
+            "enum": ["invalid", "reserved", "unavailable", null]
+          },
+          "suggestions": {
+            "type": "array",
+            "maxItems": 5,
+            "items": { "$ref": "#/components/schemas/Nickname" }
+          }
+        }
+      },
+      "Nickname": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 32,
+        "pattern": "^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$",
+        "description": "Normalized lowercase LDH nickname. Reserved-name policy is additionally enforced centrally."
+      },
+      "NicknameReservationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["nickname", "public_ipv4"],
+        "properties": {
+          "nickname": { "$ref": "#/components/schemas/Nickname" },
+          "public_ipv4": { "type": "string", "format": "ipv4" },
+          "public_ipv6": { "type": "string", "format": "ipv6" }
+        }
+      },
+      "NicknameReservationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reservation_id", "nickname", "hostname", "status", "reservation_expires_at", "retry_after"],
+        "properties": {
+          "reservation_id": { "type": "string", "format": "uuid" },
+          "nickname": { "$ref": "#/components/schemas/Nickname" },
+          "hostname": { "type": "string", "format": "hostname" },
+          "status": { "$ref": "#/components/schemas/ActivationState" },
+          "reservation_expires_at": { "type": "string", "format": "date-time" },
+          "retry_after": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "NetworkUpdateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["public_ipv4", "challenge_response"],
+        "properties": {
+          "public_ipv4": { "type": "string", "format": "ipv4" },
+          "public_ipv6": { "type": ["string", "null"], "format": "ipv6" },
+          "challenge_response": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 512,
+            "description": "Signed response to a server-issued reachability challenge."
+          }
+        }
+      },
+      "DnsStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "last_error", "retry_after"],
+        "properties": {
+          "status": { "$ref": "#/components/schemas/DnsState" },
+          "last_changed_at": { "type": ["string", "null"], "format": "date-time" },
+          "last_error": { "type": ["string", "null"], "maxLength": 500 },
+          "retry_after": { "type": ["integer", "null"], "minimum": 1 }
+        }
+      },
+      "HttpsProofRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["hostname", "certificate_fingerprint_sha256", "certificate_not_after", "challenge_nonce", "observed_at"],
+        "properties": {
+          "hostname": { "type": "string", "format": "hostname" },
+          "certificate_fingerprint_sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+          "certificate_not_after": { "type": "string", "format": "date-time" },
+          "challenge_nonce": { "type": "string", "minLength": 16, "maxLength": 128 },
+          "observed_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "HttpsStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "last_error", "retry_after"],
+        "properties": {
+          "status": { "$ref": "#/components/schemas/HttpsState" },
+          "verified_at": { "type": ["string", "null"], "format": "date-time" },
+          "certificate_not_after": { "type": ["string", "null"], "format": "date-time" },
+          "last_error": { "type": ["string", "null"], "maxLength": 500 },
+          "retry_after": { "type": ["integer", "null"], "minimum": 1 }
+        }
+      },
+      "MfaStatusUpdateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["enabled", "method", "verified_at", "recovery_codes_generated", "local_security_version"],
+        "properties": {
+          "enabled": { "const": true },
+          "method": { "const": "totp" },
+          "verified_at": { "type": "string", "format": "date-time" },
+          "recovery_codes_generated": { "const": true },
+          "local_security_version": { "type": "integer", "minimum": 1 }
+        },
+        "description": "Status metadata only. Secrets, OTPs, provisioning payloads, and recovery-code material are prohibited by additionalProperties=false."
+      },
+      "MfaStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["enabled", "method", "verified_at", "recovery_codes_generated"],
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "method": { "type": ["string", "null"], "enum": ["totp", null] },
+          "verified_at": { "type": ["string", "null"], "format": "date-time" },
+          "recovery_codes_generated": { "type": "boolean" }
+        }
+      },
+      "ActivationStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["activation_id", "installation_id", "status", "membership", "profile", "dns", "https", "mfa", "next_action", "updated_at", "version"],
+        "properties": {
+          "activation_id": { "type": "string", "format": "uuid" },
+          "installation_id": { "type": "string", "format": "uuid" },
+          "status": { "$ref": "#/components/schemas/ActivationState" },
+          "membership": { "$ref": "#/components/schemas/Membership" },
+          "profile": { "$ref": "#/components/schemas/ProfileStatus" },
+          "nickname": { "type": ["string", "null"] },
+          "hostname": { "type": ["string", "null"], "format": "hostname" },
+          "dns": { "$ref": "#/components/schemas/DnsStatus" },
+          "https": { "$ref": "#/components/schemas/HttpsStatus" },
+          "mfa": { "$ref": "#/components/schemas/MfaStatus" },
+          "next_action": { "$ref": "#/components/schemas/NextAction" },
+          "updated_at": { "type": "string", "format": "date-time" },
+          "version": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "ActivationCompletionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["acknowledge_terms"],
+        "properties": {
+          "acknowledge_terms": { "const": true }
+        }
+      },
+      "ActivationCompletionResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["activation_id", "status", "hostname", "activated_at"],
+        "properties": {
+          "activation_id": { "type": "string", "format": "uuid" },
+          "status": { "const": "active" },
+          "hostname": { "type": "string", "format": "hostname" },
+          "activated_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Malformed request",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+      },
+      "InvalidCredential": {
+        "description": "Credential invalid, expired, signature invalid, or replay detected",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+      },
+      "LicenceInactive": {
+        "description": "The authenticated customer's licence is not active",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+      },
+      "NotFound": {
+        "description": "Activation not found for the authenticated installation",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+      },
+      "Conflict": {
+        "description": "State, version, nickname, or idempotency conflict",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+      },
+      "ValidationError": {
+        "description": "Semantic validation failed",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+      },
+      "ActivationIncomplete": {
+        "description": "Activation prerequisites are incomplete",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+      },
+      "RateLimited": {
+        "description": "Request rate limited; respect Retry-After",
+        "headers": {
+          "Retry-After": { "schema": { "type": "integer", "minimum": 1 } }
+        },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+      },
+      "InternalError": {
+        "description": "Unexpected central failure",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+      }
+    }
+  }
+}

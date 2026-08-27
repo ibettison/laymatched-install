@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract_version": "1.0.0-gate2a",
+  "initial_state": "authorized",
+  "completion_state": "active",
+  "terminal_states": ["cancelled", "deactivated"],
+  "states": [
+    "authorized",
+    "nickname_reserved",
+    "dns_pending",
+    "dns_ready",
+    "https_pending",
+    "profile_pending",
+    "mfa_pending",
+    "active",
+    "retry_pending",
+    "suspended",
+    "cancelled",
+    "deactivated",
+    "nickname_quarantined"
+  ],
+  "transitions": [
+    {
+      "from": "authorized",
+      "to": "nickname_reserved",
+      "event": "nickname_reserved",
+      "guard": "licence_active_and_transactional_nickname_ownership"
+    },
+    {
+      "from": "nickname_reserved",
+      "to": "dns_pending",
+      "event": "dns_reconciliation_queued",
+      "guard": "public_address_submitted"
+    },
+    {
+      "from": "dns_pending",
+      "to": "dns_ready",
+      "event": "dns_authoritatively_verified",
+      "guard": "provider_change_complete_and_independent_resolution_matches"
+    },
+    {
+      "from": "dns_pending",
+      "to": "retry_pending",
+      "event": "dns_failed",
+      "guard": "retryable_dns_failure"
+    },
+    {
+      "from": "dns_ready",
+      "to": "https_pending",
+      "event": "https_provisioning_started",
+      "guard": "port_80_reachability_proved"
+    },
+    {
+      "from": "https_pending",
+      "to": "profile_pending",
+      "event": "https_verified",
+      "guard": "independent_https_probe_passed_and_profile_incomplete"
+    },
+    {
+      "from": "https_pending",
+      "to": "mfa_pending",
+      "event": "https_verified",
+      "guard": "independent_https_probe_passed_and_profile_complete"
+    },
+    {
+      "from": "https_pending",
+      "to": "retry_pending",
+      "event": "https_failed",
+      "guard": "retryable_https_failure"
+    },
+    {
+      "from": "profile_pending",
+      "to": "mfa_pending",
+      "event": "profile_completed",
+      "guard": "required_profile_fields_valid"
+    },
+    {
+      "from": "mfa_pending",
+      "to": "active",
+      "event": "activation_completed",
+      "guard": "licence_active_and_dns_ready_and_https_verified_and_profile_complete_and_local_mfa_verified"
+    },
+    {
+      "from": "retry_pending",
+      "to": "dns_pending",
+      "event": "dns_retry_scheduled",
+      "guard": "last_failed_stage_is_dns"
+    },
+    {
+      "from": "retry_pending",
+      "to": "https_pending",
+      "event": "https_retry_scheduled",
+      "guard": "last_failed_stage_is_https"
+    },
+    {
+      "from": "suspended",
+      "to": "nickname_quarantined",
+      "event": "hostname_withdrawn",
+      "guard": "dns_customer_records_removed"
+    },
+    {
+      "from": "cancelled",
+      "to": "nickname_quarantined",
+      "event": "hostname_withdrawn",
+      "guard": "entitlement_ended_and_dns_customer_records_removed"
+    },
+    {
+      "from": "deactivated",
+      "to": "nickname_quarantined",
+      "event": "hostname_withdrawn",
+      "guard": "dns_customer_records_removed"
+    }
+  ],
+  "global_transitions": [
+    {
+      "from": "*",
+      "except": ["cancelled", "deactivated"],
+      "to": "suspended",
+      "event": "licence_suspended"
+    },
+    {
+      "from": "*",
+      "except": ["cancelled", "deactivated"],
+      "to": "cancelled",
+      "event": "entitlement_ended"
+    },
+    {
+      "from": "*",
+      "except": ["cancelled", "deactivated"],
+      "to": "deactivated",
+      "event": "customer_deactivated"
+    }
+  ],
+  "invariants": [
+    "customer_identity_is_resolved_from_authenticated_installation_identity",
+    "nickname_ownership_requires_a_unique_transactional_reservation",
+    "dns_ready_requires_authoritative_provider_and_independent_resolution_confirmation",
+    "https_verified_requires_an_independent_central_probe",
+    "active_requires_an_active_licence",
+    "active_requires_complete_profile",
+    "active_requires_dns_ready",
+    "active_requires_https_verified",
+    "active_requires_locally_verified_mfa_status",
+    "totp_secret_and_recovery_codes_never_cross_the_api_boundary"
+  ]
+}
