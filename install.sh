@@ -458,7 +458,7 @@ services:
         condition: service_healthy
     volumes:
       - bookmaker_icon_cache:/var/lib/laymatchedbetting/bookmaker-icons
-      - /var/lib/laymatched/activation:/var/lib/laymatched/activation:ro
+      - /var/lib/laymatched/activation/state.json:/var/lib/laymatched/activation/state.json:ro
     environment:
       - DATABASE_URL=postgresql+psycopg://laymatched:${POSTGRES_PASSWORD}@db:5432/laymatched_betting
       - AUTH_USERNAME=${AUTH_USERNAME}
@@ -704,7 +704,7 @@ services:
         condition: service_healthy
     volumes:
       - bookmaker_icon_cache:/var/lib/laymatchedbetting/bookmaker-icons
-      - /var/lib/laymatched/activation:/var/lib/laymatched/activation:ro
+      - /var/lib/laymatched/activation/state.json:/var/lib/laymatched/activation/state.json:ro
     environment:
       - DATABASE_URL=postgresql+psycopg://laymatched:${POSTGRES_PASSWORD}@db:5432/laymatched_betting
       - AUTH_USERNAME=${AUTH_USERNAME}

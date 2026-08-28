@@ -32,5 +32,14 @@ class LocalActivationTests(unittest.TestCase):
         env = {**os.environ, "LAYMATCHED_ALLOW_NON_ROOT_TEST": "1"}
         output = subprocess.check_output(["python3", "tools/local_activation.py", "--state-dir", str(self.directory), "init", "installation-1"], cwd=Path(__file__).parents[1], env=env, text=True)
         self.assertEqual(json.loads(output)["stage"], "installed"); self.assertFalse(any(term in output.lower() for term in ("token", "secret", "private", "credential")))
+    def test_authoritative_v1_fixture_is_accepted_by_writer_contract(self):
+        fixture = Path(__file__).parents[1] / "contracts/local-activation/fixtures/state-v1-installed.json"
+        from tools.local_activation import validate
+        self.assertEqual(validate(json.loads(fixture.read_text()))["stage"], "installed")
+    def test_installer_mounts_only_journal_into_customer_api(self):
+        install_script = (Path(__file__).parents[1] / "install.sh").read_text()
+        mount = "/var/lib/laymatched/activation/state.json:/var/lib/laymatched/activation/state.json:ro"
+        self.assertEqual(install_script.count(mount), 2)
+        self.assertNotIn("/var/lib/laymatched/activation:/var/lib/laymatched/activation:ro", install_script)
 
 if __name__ == "__main__": unittest.main()

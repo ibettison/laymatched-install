@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://laymatched.example/contracts/local-activation/state-v1.schema.json",
+  "title": "Installer-owned local activation state v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "installation_id", "stage", "revision", "updated_at", "last_error"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "installation_id": {"type": "string", "minLength": 1},
+    "stage": {
+      "enum": ["installed", "authorized", "nickname_reserved", "dns_pending", "dns_ready", "https_pending", "profile_pending", "mfa_pending", "active"]
+    },
+    "revision": {"type": "integer", "minimum": 1},
+    "updated_at": {"type": "string", "minLength": 1},
+    "last_error": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "retryable"],
+          "properties": {
+            "code": {"type": "string", "minLength": 1},
+            "retryable": {"type": "boolean"}
+          }
+        }
+      ]
+    }
+  }
+}
