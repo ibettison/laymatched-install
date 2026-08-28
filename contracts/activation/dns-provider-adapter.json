@@ -1,0 +1,83 @@
+{
+  "document_type": "laymatched-internal-dns-adapter-contract",
+  "contract_version": "1.0.0-slice0",
+  "visibility": "central-internal-only",
+  "public_api_provider_neutral": true,
+  "customer_vps_provider_credentials": false,
+  "ownership_key": ["activation_id", "hostname", "record_type"],
+  "allowed_record_types": ["A", "AAAA"],
+  "hostname_suffix": ".matched.laysports.co.uk",
+  "ttl": {
+    "minimum": 60,
+    "maximum": 3600,
+    "default": 300
+  },
+  "operations": {
+    "ensure_record": {
+      "description": "Idempotently make the owned record equal the validated desired state.",
+      "request_fields": ["operation_id", "activation_id", "hostname", "record_type", "values", "ttl"],
+      "result_states": ["pending", "applied", "failed"]
+    },
+    "observe_record": {
+      "description": "Return provider-observed state for an owned record without changing it.",
+      "request_fields": ["operation_id", "activation_id", "hostname", "record_type"],
+      "result_states": ["absent", "pending", "applied", "failed"]
+    },
+    "delete_owned_record": {
+      "description": "Idempotently remove only the record owned by the supplied activation.",
+      "request_fields": ["operation_id", "activation_id", "hostname", "record_type"],
+      "result_states": ["absent", "pending", "applied", "failed"]
+    }
+  },
+  "internal_error_classes": [
+    "transient",
+    "rate_limited",
+    "policy_rejected",
+    "authentication_failed",
+    "provider_unavailable",
+    "unexpected"
+  ],
+  "public_error_mapping": {
+    "pending": "dns_pending",
+    "retryable_failure": "dns_failed",
+    "permanent_failure": "dns_failed"
+  },
+  "invariants": [
+    "provider_names_and_provider_error_payloads_never_cross_the_public_api",
+    "provider_credentials_exist_only_in_the_central_worker_runtime",
+    "all_mutations_are_idempotent_by_operation_id_and_ownership_key",
+    "delete_never_removes_a_record_owned_by_another_activation",
+    "dns_ready_requires_provider_observation_and_independent_resolution",
+    "hostnames_record_types_values_and_ttl_are_validated_before_adapter_invocation"
+  ],
+  "fake_adapter": {
+    "clock": "logical_ticks_starting_at_zero",
+    "ordering": "global_monotonic_call_index",
+    "operation_id_replay": "return_the_original_result_without_incrementing_mutation_count",
+    "state_isolation": "one_in_memory_store_per_test_case",
+    "network_access": false,
+    "default_scenario": "immediate_success",
+    "scenarios": {
+      "immediate_success": {
+        "ensure_results": ["applied"],
+        "observe_results": ["applied"],
+        "delete_results": ["applied", "absent"]
+      },
+      "propagation_delay_two_ticks": {
+        "ensure_results": ["pending"],
+        "observe_results": ["pending", "pending", "applied"],
+        "delete_results": ["pending", "absent"]
+      },
+      "transient_failure_then_success": {
+        "ensure_results": ["failed:transient", "applied"],
+        "observe_results": ["applied"],
+        "delete_results": ["applied", "absent"]
+      },
+      "permanent_policy_failure": {
+        "ensure_results": ["failed:policy_rejected"],
+        "observe_results": ["failed:policy_rejected"],
+        "delete_results": ["failed:policy_rejected"]
+      }
+    }
+  }
+}

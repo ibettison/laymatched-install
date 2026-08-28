@@ -1,6 +1,6 @@
 # LayMatched Activation Contract
 
-> **STATUS: GATE 2A CONTRACT — NOT APPROVED FOR IMPLEMENTATION OR DEPLOYMENT**
+> **STATUS: SLICE 0 CONTRACT — RUNTIME IMPLEMENTATION AND DEPLOYMENT NOT AUTHORISED**
 
 This directory is the authoritative shared integration boundary for customer
 activation. It does not contain a licensing backend, onboarding frontend, DNS
@@ -15,6 +15,9 @@ The approved design authority is
   response schemas, status representations, and canonical error codes.
 - [`state-machine.json`](state-machine.json) defines activation states,
   transitions, guards, global entitlement transitions, and invariants.
+- [`dns-provider-adapter.json`](dns-provider-adapter.json) defines the private
+  central DNS-worker port and deterministic fake-provider scenarios. It is not
+  a customer-facing API and contains no real-provider credentials or calls.
 - [`tests/test_contract.py`](tests/test_contract.py) validates the contract's
   structure, references, examples, security boundaries, state consistency, and
   idempotency requirements using only the Python standard library.
@@ -40,6 +43,15 @@ Bootstrap registers an installation public key and returns a short-lived
 activation JWT. Every later operation requires both that JWT and an Ed25519
 request signature, with timestamp and nonce headers. The installation private
 key stays on the customer VPS.
+
+The one deliberate exception to the JWT requirement is
+`POST /v1/activation-sessions`: an already registered installation uses its
+public installation ID plus the Ed25519 signature to obtain a replacement
+short-lived JWT after expiry, browser reload, interruption, or VPS reboot. The
+installation ID is not authentication. The central service must verify the
+signature against the key registered at bootstrap, consume a fresh nonce, and
+re-check licence and activation state before issuing a session. The installer
+credential is not stored or reused for session refresh.
 
 The canonical signature input for a later implementation is UTF-8 text joined
 by line feed characters in this exact order:
@@ -68,8 +80,40 @@ scoped to installation and operation.
 - A stale `If-Match` value returns `409 version_conflict`.
 - A reused signature nonce returns `401 replay_detected`.
 
+For a transport retry of session renewal, the caller reuses the same
+`Idempotency-Key` and exact body but signs the new request with a fresh nonce.
+The server returns the stored response. Reusing the original nonce is always a
+replay error, even when the idempotency key matches.
+
 The availability endpoint is advisory and non-mutating. Only the reservation
 endpoint, backed by central transactional uniqueness, grants nickname ownership.
+
+An incomplete activation may renew only its own live nickname reservation via
+the signed renewal endpoint. Renewal extends the existing lease; it cannot
+change ownership, revive an expired/released/quarantined reservation, or renew
+a terminal activation. The central service applies a bounded lease policy.
+Once DNS work commits hostname ownership, `reservation_expires_at` is `null`
+and a renewal is an idempotent no-op. Pending central work must renew the lease
+before expiry so a DNS or HTTPS delay does not take a legitimate nickname away.
+
+## DNS provider boundary
+
+The public activation contract is provider-neutral. `laysports.co.uk` is now
+authoritative on Cloudflare, but Cloudflare is an internal central
+infrastructure detail and must never appear in public schemas or customer-safe
+errors.
+
+Public activation handlers validate ownership and desired state, then commit a
+transactional outbox item. A central worker invokes the internal adapter. The
+customer VPS never calls a DNS provider and never receives a provider token,
+account identifier, zone identifier, raw provider response, or provider error.
+
+All normal automated tests use the deterministic fake semantics in
+`dns-provider-adapter.json`. The fake uses a logical clock, a monotonic call
+index, isolated in-memory state, fixed scenario sequences, and no network.
+Replaying an operation ID returns the original result without incrementing the
+mutation count. Real Cloudflare integration and credentials require a later,
+separately approved security and infrastructure gate.
 
 ## State semantics
 
@@ -142,6 +186,10 @@ Worker 1 owns the local installer/onboarding and MFA experience.
   `nickname-reservations` for ownership.
 - Poll `GET /v1/activations/{id}` using `next_action`, DNS state, HTTPS state,
   and `retry_after`; do not infer state from prose messages.
+- Renew the short-lived activation JWT through the signed installation-session
+  endpoint; never retain the installer credential for resume.
+- Renew a live nickname reservation during legitimate pending work using the
+  same activation identity and contract idempotency rules.
 - Generate, store, display, and verify TOTP and recovery codes locally.
 - Send only the fields permitted by `MfaStatusUpdateRequest`.
 - Enter the private application only after `/complete` returns `active`.
@@ -162,7 +210,7 @@ LM-2nd owns the future central licensing and activation implementation.
 - Enforce transactional nickname uniqueness and quarantine centrally.
 - Treat DNS and HTTPS as asynchronous desired/observed state.
 - Implement DNS through an internal adapter/worker, not inside this public
-  contract and not in Gate 2A.
+  request path. Use the deterministic fake contract for normal tests.
 - Independently verify authoritative DNS and HTTPS before advancing state.
 - Strictly reject additional MFA properties so secret-bearing fields cannot be
   accepted accidentally.
@@ -189,5 +237,5 @@ does not authorize real provider integration or deployment.
 
 Contract evolution must remain backward compatible within `/v1` unless a
 reviewed breaking-change process explicitly creates a new API version. Any
-change that alters the approved Gate 1 architecture requires a new architecture
+change that alters the approved activation architecture requires a new architecture
 gate rather than an implementation-only decision.

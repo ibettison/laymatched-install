@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "contract_version": "1.0.0-gate2a",
+  "contract_version": "1.1.0-slice0",
   "initial_state": "authorized",
   "completion_state": "active",
   "terminal_states": ["cancelled", "deactivated"],
@@ -141,6 +141,11 @@
     "active_requires_dns_ready",
     "active_requires_https_verified",
     "active_requires_locally_verified_mfa_status",
-    "totp_secret_and_recovery_codes_never_cross_the_api_boundary"
+    "totp_secret_and_recovery_codes_never_cross_the_api_boundary",
+    "activation_session_resume_requires_the_registered_installation_signature_and_a_fresh_nonce",
+    "nickname_reservation_renewal_never_changes_ownership_or_revives_an_expired_or_terminal_reservation",
+    "pending_central_work_renews_a_live_reservation_before_lease_expiry",
+    "public_dns_contract_and_customer_errors_are_provider_neutral",
+    "dns_provider_credentials_exist_only_in_the_central_worker_runtime"
   ]
 }

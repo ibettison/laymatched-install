@@ -1,6 +1,6 @@
 # LayMatched DNS, HTTPS, and Customer Activation Architecture
 
-> **STATUS: GATE 1 DESIGN — NOT APPROVED FOR IMPLEMENTATION**
+> **STATUS: SLICE 0 ARCHITECTURE — RUNTIME IMPLEMENTATION NOT AUTHORISED**
 >
 > This document records architecture and interface design only. It does not
 > authorize implementation, infrastructure changes, DNS changes, runtime
@@ -63,8 +63,9 @@ Read-only investigation established the following:
   - `auth.matched.laysports.co.uk`
   - `registry.matched.laysports.co.uk`
 - Those names currently resolve to `82.165.220.193`.
-- `laysports.co.uk`, including the currently undelegated
-  `matched.laysports.co.uk` namespace, is authoritative on Fasthosts LiveDNS.
+- `laysports.co.uk` is authoritative on Cloudflare DNS. Existing production
+  records were migrated conservatively and initially retained as DNS-only.
+  Customer records will be explicit names beneath `matched.laysports.co.uk`.
 - The current `matched.laysports.co.uk` certificate is a single-host Let's
   Encrypt certificate, not a wildcard certificate.
 - Central LayMatched PostgreSQL already contains customer and Stripe
@@ -115,44 +116,29 @@ The customer VPS:
 - Verifies MFA locally.
 - Reports only signed status assertions centrally.
 
-Stripe and DNS provider credentials remain within central services on
-Fasthosts.
+Stripe and DNS provider credentials remain within the central service runtime.
+They are never built into customer images or sent to customer VPSs.
 
 ## DNS design
 
-### Delegation and zone arrangement
+### Authoritative zone foundation
 
-To provide the exact hostname `nickname.matched.laysports.co.uk`, the
-API-capable authoritative provider must control records directly beneath
-`matched.laysports.co.uk`.
+Cloudflare is now authoritative for the existing `laysports.co.uk` zone. The
+earlier proposal to delegate `matched.laysports.co.uk` from Fasthosts to Route
+53 is obsolete and must not be implemented. Existing production records were
+copied conservatively and initially left DNS-only while the migration was
+verified.
 
-The recommended arrangement is:
+Customer hostnames use explicit records in the existing authoritative zone:
 
-1. Keep the parent `laysports.co.uk` zone at Fasthosts.
-2. Create an AWS Route 53 public hosted zone for
-   `matched.laysports.co.uk`.
-3. Inventory and copy every existing record beneath
-   `matched.laysports.co.uk` into that zone.
-4. Validate the copied zone directly against every Route 53 authoritative
-   nameserver.
-5. Add NS delegation records for `matched.laysports.co.uk` to the Fasthosts
-   parent zone.
-6. Retain the old Fasthosts records during a monitored rollback window.
+```text
+nickname.matched.laysports.co.uk
+```
 
-Route 53 supports a separately hosted delegated subdomain and can point records
-to infrastructure outside AWS. See the
-[AWS subdomain delegation documentation](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-routing-traffic-for-subdomains.html).
-
-The existing apex, Auth, Registry, and any other records found during the full
-provider inventory must be pre-populated unchanged. Both old and new
-authoritative data should remain identical throughout DNS cache convergence.
-
-A more isolated namespace such as
-`nickname.customers.matched.laysports.co.uk` would permit automation of only
-that deeper child zone. It would not meet the specified customer URL. The exact
-requested URL therefore requires the automated provider to host the same zone
-that contains `matched`, `auth`, and `registry`, increasing the importance of
-IAM and application-level protections.
+Cloudflare remains an internal implementation detail. The public Activation
+API, state machine, errors, customer VPS, and normal test suite are
+provider-neutral. Replacing Cloudflare later must require only a new internal
+adapter, not a customer contract change.
 
 ### Customer records
 
@@ -179,12 +165,16 @@ IP changes, and no accidental routing for unreserved names.
 3. Reject reserved, confusable, misleading, and policy-prohibited names.
 4. Insert a transactional reservation protected by a unique constraint on the
    normalized nickname.
-5. Give an incomplete reservation a short lease, such as 15 minutes.
-6. Commit durable ownership to the customer only when an activation is
+5. Give an incomplete reservation a bounded renewable lease, initially 15
+   minutes. Legitimate pending central work renews it before expiry.
+6. Permit only the owning signed activation to request renewal. Renewal cannot
+   transfer ownership or revive an expired, released, quarantined, or terminal
+   reservation.
+7. Commit durable ownership to the customer only when an activation is
    established.
-7. Queue DNS reconciliation using a transactional outbox.
-8. Poll the provider change until authoritative propagation is confirmed.
-9. Independently resolve the hostname before allowing ACME issuance.
+8. Queue DNS reconciliation using a transactional outbox.
+9. Observe provider state until the desired record is applied.
+10. Independently resolve the hostname before allowing ACME issuance.
 
 An availability check is advisory only. The unique transactional reservation
 is the authority. A nickname must never be transferred because another
@@ -227,91 +217,69 @@ Stripe cancellation and explicit customer deactivation are distinct:
 
 - Record the desired state and outbox event in the same database transaction.
 - Process DNS asynchronously; return `202` and `retry_after` while pending.
-- Store the provider change ID and poll it to completion.
+- Store an opaque internal provider operation reference where one exists and
+  observe it to completion.
 - Retry throttling and transient failures with bounded exponential backoff and
   jitter.
-- Serialize changes to the same hosted zone when required by the provider.
+- Serialize or rate-limit same-zone changes where required by the adapter.
 - If DNS succeeds but an API response is lost, idempotency and reconciliation
   recover the existing change instead of creating another owner or record.
 - If DNS fails, retain the reservation and expose a retryable state. Do not
   release ownership automatically.
 - If certificate issuance fails, retain the correct DNS record and retry ACME;
   do not expose the private app over plain HTTP.
-- Parent-zone rollback is available only while the original Fasthosts records
-  remain intact and verified. During propagation, old and new zones must answer
-  identically.
+- Provider failures do not trigger zone migration or customer-visible provider
+  instructions. Central operations retain desired state and reconcile or use a
+  separately reviewed infrastructure rollback.
 
-## DNS provider requirements
+## Internal DNS adapter contract
 
-The provider must offer:
+The machine-readable internal port is
+`contracts/activation/dns-provider-adapter.json`. It defines three operations:
 
-- Authoritative hosting for a delegated child zone.
-- DNSSEC support and a documented delegation procedure.
-- A stable API for atomic record-set changes.
-- Per-zone credential scoping.
-- Record-name, record-type, and action restrictions where available.
-- Change identifiers and propagation status.
-- Audit logging.
-- High availability and published limits.
-- Declarative infrastructure support, such as Terraform.
-- Credential rotation without DNS downtime.
-- Documented retry and throttling behavior.
+- `ensure_record`: idempotently make an owned record equal desired state.
+- `observe_record`: read provider-observed state without mutation.
+- `delete_owned_record`: idempotently remove only the record owned by the
+  specified activation.
 
-AWS Route 53 is the recommended initial provider because it meets these
-requirements without requiring the Fasthosts VPS to run in AWS.
+The ownership key is activation ID, hostname, and record type. An independent
+resolver, not the provider response alone, is required before `dns_ready`.
+Provider-specific names, identifiers, request payloads, errors, and credentials
+must not cross the public API. Internal failures map only to the canonical
+`dns_pending` or `dns_failed` customer errors with retry metadata.
 
-## DNS cost and plan assumptions
+Normal automated tests use a deterministic, in-memory fake adapter. It has a
+logical clock, monotonic call order, isolated state, fixed result sequences,
+idempotent operation replay, and no network. Required scenarios cover immediate
+success, two-tick propagation delay, transient failure followed by success,
+and permanent policy failure.
 
-At the time of Gate 1 investigation, Route 53 public pricing was approximately:
+## Cloudflare adapter security model
 
-- USD 0.50 per hosted zone per month for the first 25 zones.
-- USD 0.40 per million standard DNS queries for the first billion queries per
-  month.
-- Up to 10,000 records included in the hosted-zone charge, followed by a small
-  additional per-record charge.
+The later real adapter runs only in the central DNS worker. Slice 0 neither
+implements it nor authorizes a credential or DNS change.
 
-For one hosted zone and an early customer population, expected DNS expenditure
-should be close to the hosted-zone minimum plus negligible query charges. See
-[AWS Route 53 pricing](https://aws.amazon.com/route53/pricing/).
+Required controls for that later gate are:
 
-A record-change request supports up to 1,000 record elements. API throttling
-and `PriorRequestNotComplete` responses require serialized same-zone changes
-and exponential backoff. See
-[Route 53 quotas](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/DNSLimitations.html).
+- a dedicated non-human Cloudflare API token restricted to the
+  `laysports.co.uk` zone and only the DNS read/edit permissions required;
+- zone-ID pinning in central configuration;
+- adapter input restricted to owned `A` and separately verified `AAAA` records
+  beneath `matched.laysports.co.uk`, with bounded TTL and public addresses;
+- an application-level protected-name denylist for the apex and infrastructure
+  names such as `auth`, `registry`, `www`, `api`, `admin`, `mail`, and
+  `support`;
+- no wildcard, CNAME, MX, TXT, NS, infrastructure-record, proxy-mode, or zone
+  setting mutation through customer activation;
+- central secret-store injection, rotation, audit, rate limits, anomaly alerts,
+  and a separately controlled break-glass administrator path;
+- no token, account/zone identifier, provider response, or raw provider error in
+  source control, CI logs, public API payloads, customer images, or customer
+  VPS storage.
 
-Pricing and limits are assumptions, not commitments, and must be checked again
-immediately before procurement.
-
-## DNS security model
-
-The Route 53 credential exists only in the central DNS worker.
-
-Controls should include:
-
-- A dedicated AWS account or tightly isolated production account.
-- A dedicated non-human IAM principal for the DNS worker.
-- `ChangeResourceRecordSets` only on the
-  `matched.laysports.co.uk` hosted-zone ARN.
-- Permitted record types limited to `A` and `AAAA` for customer automation.
-- IAM record-name/action conditions and explicit denies for the apex, `auth`,
-  `registry`, and every other protected name.
-- Only the read operations required to reconcile record state and inspect
-  change status.
-- A separate break-glass administrator role.
-- Credentials stored in a root-readable central secret store, never source
-  control, the installer, an image, or a customer payload.
-- Routine rotation.
-- CloudTrail audit and alerts for mass changes, protected-name attempts, and
-  unusual API volume.
-- A second application-level protected-name policy.
-- Explicit review for every infrastructure-record change.
-
-Route 53 supports hosted-zone resource scoping and condition keys for record
-names, types, and actions. See the
-[Route 53 IAM reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_route53.html).
-
-The DNS worker consumes narrowly defined desired-state jobs. A public API
-request handler must never execute uncontrolled direct provider calls.
+Cloudflare token creation/use and real adapter acceptance require a fresh
+explicit infrastructure approval. A public request handler never calls
+Cloudflare directly; it commits desired state and an outbox item for the worker.
 
 ## HTTPS and ACME design
 
@@ -346,7 +314,7 @@ retaining port 80 with ordinary traffic redirected to HTTPS. See the
 
 ### Certificate capacity
 
-At Gate 1, Let's Encrypt limited new issuance to 50 certificates per
+At the original architecture review, Let's Encrypt limited new issuance to 50 certificates per
 registered domain per seven days. Customer names under `laysports.co.uk` share
 that registered-domain limit. Launch volume must be forecast, staging must be
 used during testing, and a production limit override or alternative ACME CA
@@ -400,6 +368,14 @@ Subsequent mutations use the JWT plus a request signature over method, path,
 body hash, timestamp, and nonce. This limits bearer-token copying and replay.
 The private installation key never leaves the VPS.
 
+After the short-lived JWT expires, the VPS calls
+`POST /v1/activation-sessions` with its public installation ID and a request
+signed by the registered Ed25519 key. The installation ID only locates the
+public key; it is not a credential. The central service consumes a fresh nonce,
+re-checks licence and activation state, and issues a new short-lived JWT. This
+supports browser reload, interruption, and VPS reboot without retaining or
+re-pasting the installer credential.
+
 ### Idempotency and concurrency
 
 Every mutating endpoint requires:
@@ -413,6 +389,8 @@ expiry.
 
 - Same key and same request: return the original response.
 - Same key and different request: return `409 idempotency_conflict`.
+- A retried session request uses the same idempotency key and body with a fresh
+  signature nonce. Reusing a nonce is always `401 replay_detected`.
 - DNS work is asynchronous and backed by a transactional outbox.
 - Optimistic row versions or ETags prevent conflicting state transitions.
 - Responses include a correlation ID and machine-readable error code.
@@ -458,6 +436,14 @@ An inactive or cancelled entitlement returns `403 licence_inactive`. The
 central policy determines the number of active installations permitted by one
 licence.
 
+### `POST /v1/activation-sessions`
+
+Issues a replacement short-lived JWT to a previously registered installation.
+It requires `X-Installation-Id`, timestamp, fresh nonce, Ed25519 signature, and
+an idempotency key. It never accepts an installer credential or a replacement
+public key. The response returns activation state and `next_action` so local
+resume follows central authority rather than replaying completed steps.
+
 ### `POST /v1/activations/{id}/nickname-reservations`
 
 Request:
@@ -490,6 +476,14 @@ Expected errors include:
 - `installation_limit_reached`
 
 A unique database constraint, not an availability check, decides ownership.
+
+### `POST /v1/activations/{id}/nickname-reservations/{reservation_id}/renew`
+
+The owning signed activation may extend a live, incomplete reservation by a
+bounded interval while central DNS/HTTPS work is pending or retrying. Renewal
+uses idempotency, nonce replay protection, and `If-Match`. It cannot rename,
+transfer, revive, or extend a terminal/quarantined reservation. Once ownership
+is committed, the expiry is null and renewal is an idempotent no-op.
 
 ### `PUT /v1/activations/{id}/network`
 
@@ -814,8 +808,10 @@ the shared OpenAPI contract, state machine, and error catalogue are frozen.
 This is a proposed sequence for a later approved implementation phase; it is
 not authorization to begin any step.
 
-1. Approve the exact hostname namespace and DNS provider.
-2. Freeze the OpenAPI contract, state machine, error codes, and identity
+1. Confirm the exact hostname namespace and the existing Cloudflare zone
+   boundary; any real token/use remains separately gated.
+2. Freeze the provider-neutral OpenAPI contract, state machine, internal DNS
+   adapter, fake semantics, error codes, and identity
    semantics.
 3. Establish the canonical customer/licence ID bridge between installer
    authorization and central PostgreSQL.
@@ -825,11 +821,13 @@ not authorization to begin any step.
 7. Implement and test a fake DNS adapter and reconciliation worker.
 8. Build Worker 1 UI and local MFA against the mock API in parallel.
 9. Implement local ACME/nginx orchestration using staging ACME.
-10. Perform a complete inventory of existing `matched.laysports.co.uk` DNS.
-11. Create and validate the new authoritative zone without delegation.
+10. Re-verify the Cloudflare record inventory and protected-name policy before
+    any real adapter is enabled.
+11. Implement the restricted Cloudflare adapter behind the already-tested
+    internal port, without changing the public contract.
 12. Arrange production ACME capacity or a rate-limit override.
-13. Conduct a separately reviewed DNS delegation maintenance phase with tested
-    rollback readiness.
+13. Conduct a separately reviewed Cloudflare credential and test-record phase
+    with rollback readiness.
 14. Run staged end-to-end activation with a non-production customer
     installation.
 15. Security-test identity binding, nickname races, replay protection,
@@ -838,10 +836,11 @@ not authorization to begin any step.
 
 ## Dependencies
 
-- An API-capable authoritative DNS account.
-- Access to modify only the parent-zone NS delegation at Fasthosts.
-- A complete export and inventory of every current
-  `matched.laysports.co.uk` record.
+- The existing Cloudflare-authoritative `laysports.co.uk` zone.
+- A restricted central Cloudflare token, created and used only under a later
+  explicit approval.
+- A verified inventory and protected-name policy for current records beneath
+  `matched.laysports.co.uk`.
 - Canonical linkage between installer-token customer identity and the
   Stripe-backed customer identity.
 - A durable queue/outbox and retry worker.
@@ -860,8 +859,8 @@ not authorization to begin any step.
 
 - **Identity mismatch:** separate installer-token and customer databases could
   activate the wrong record unless the canonical ID bridge is enforced.
-- **Delegation outage:** missing records during the zone move could interrupt
-  the existing application, Auth, or Registry.
+- **Existing-record damage:** a wrongly scoped adapter could change migrated
+  production records for the application, Auth, Registry, mail, or website.
 - **DNS credential blast radius:** the exact hostname requirement places
   automated customer records in the same child zone as critical services.
 - **Certificate capacity:** the registered-domain issuance limit can constrain
@@ -900,8 +899,9 @@ not authorization to begin any step.
 - Runtime modified: **No**
 - DNS modified: **No**
 - Fasthosts modified: **No**
+- Cloudflare modified: **No**
 - LMTest2 modified: **No**
 - Credentials or secrets modified: **No**
 - Recommendations implemented: **No**
 
-**GATE 1 REMAINS CLOSED — AWAITING AGENT REVIEW**
+**SLICE 0 DEFINES CONTRACT/ARCHITECTURE ONLY — RUNTIME GATES REMAIN CLOSED**

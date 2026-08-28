@@ -10,6 +10,7 @@ from pathlib import Path
 CONTRACT_DIR = Path(__file__).resolve().parents[1]
 OPENAPI_PATH = CONTRACT_DIR / "openapi.json"
 STATE_MACHINE_PATH = CONTRACT_DIR / "state-machine.json"
+DNS_ADAPTER_PATH = CONTRACT_DIR / "dns-provider-adapter.json"
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
 MUTATING_METHODS = {"post", "put", "patch", "delete"}
 FORBIDDEN_MFA_NAMES = {
@@ -24,7 +25,15 @@ FORBIDDEN_MFA_NAMES = {
 
 def load_json(path):
     with path.open(encoding="utf-8") as handle:
-        return json.load(handle)
+        def reject_duplicate_keys(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise AssertionError(f"{path}: duplicate JSON key {key!r}")
+                result[key] = value
+            return result
+
+        return json.load(handle, object_pairs_hook=reject_duplicate_keys)
 
 
 class SchemaValidator:
@@ -143,6 +152,7 @@ class ActivationContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.openapi = load_json(OPENAPI_PATH)
         cls.machine = load_json(STATE_MACHINE_PATH)
+        cls.dns_adapter = load_json(DNS_ADAPTER_PATH)
         cls.validator = SchemaValidator(cls.openapi)
 
     def operations(self):
@@ -203,9 +213,21 @@ class ActivationContractTests(unittest.TestCase):
                 installer_operations.append((path, method))
         self.assertEqual([("/v1/activations", "post")], installer_operations)
 
-    def test_post_bootstrap_operations_require_token_and_signature(self):
+    def test_post_bootstrap_operations_require_expected_installation_authentication(self):
         for path, method, operation in self.operations():
             if (path, method) == ("/v1/activations", "post"):
+                continue
+            if (path, method) == ("/v1/activation-sessions", "post"):
+                self.assertEqual(
+                    [{"InstallationIdentity": [], "InstallationSignature": []}],
+                    operation["security"],
+                )
+                names = self.parameter_names(operation)
+                self.assertIn("X-Installation-Id", names)
+                self.assertIn("X-Signature-Timestamp", names)
+                self.assertIn("X-Signature-Nonce", names)
+                self.assertNotIn("InstallerCredential", operation["security"][0])
+                self.assertNotIn("ActivationToken", operation["security"][0])
                 continue
             self.assertIn(
                 {"ActivationToken": [], "InstallationSignature": []},
@@ -323,12 +345,102 @@ class ActivationContractTests(unittest.TestCase):
             "dns_api_token",
             "route53_access_key",
             "route53_secret_key",
+            "cloudflare_api_token",
+            "cloudflare_token",
+            "cloudflare_account_id",
+            "cloudflare_zone_id",
             "stripe_api_key",
             "stripe_webhook_secret",
             "totp_secret",
             "recovery_codes",
         }
         self.assertEqual(set(), property_names & forbidden)
+
+    def test_public_contract_is_dns_provider_neutral(self):
+        serialized = json.dumps(self.openapi).lower()
+        for provider_name in ("cloudflare", "route 53", "route53", "fasthosts", "livedns"):
+            self.assertNotIn(provider_name, serialized)
+        details = self.openapi["components"]["schemas"]["ErrorDetails"]
+        self.assertIs(details["additionalProperties"], False)
+        self.assertTrue(
+            set(details["properties"]).isdisjoint(
+                {"provider", "provider_error", "provider_code", "provider_request_id", "zone_id"}
+            )
+        )
+
+    def test_session_resume_is_signed_idempotent_and_replay_protected(self):
+        operation = self.openapi["paths"]["/v1/activation-sessions"]["post"]
+        names = self.parameter_names(operation)
+        self.assertTrue(
+            {"X-Installation-Id", "X-Signature-Timestamp", "X-Signature-Nonce", "Idempotency-Key"}
+            <= names
+        )
+        description = operation["description"].lower()
+        self.assertIn("fresh signature nonce", description)
+        self.assertIn("idempotency-key", description)
+        request_schema = self.dereference(
+            operation["requestBody"]["content"]["application/json"]["schema"]
+        )
+        self.assertEqual({"activation_id"}, set(request_schema["properties"]))
+        self.assertIs(request_schema["additionalProperties"], False)
+        error_codes = set(self.openapi["components"]["schemas"]["ErrorCode"]["enum"])
+        self.assertTrue({"invalid_signature", "replay_detected", "idempotency_conflict"} <= error_codes)
+
+    def test_nickname_reservation_can_be_safely_renewed(self):
+        path = "/v1/activations/{activation_id}/nickname-reservations/{reservation_id}/renew"
+        operation = self.openapi["paths"][path]["post"]
+        names = self.parameter_names(operation)
+        self.assertTrue(
+            {"activation_id", "reservation_id", "Idempotency-Key", "If-Match",
+             "X-Signature-Timestamp", "X-Signature-Nonce"} <= names
+        )
+        self.assertIn("never changes nickname ownership", operation["description"])
+        response = self.openapi["components"]["schemas"]["NicknameReservationResponse"]
+        self.assertIn("null", response["properties"]["reservation_expires_at"]["type"])
+
+    def test_central_mfa_schemas_exclude_all_secret_material(self):
+        schemas = self.openapi["components"]["schemas"]
+        forbidden = {
+            "totp_secret", "totp_seed", "otp", "provisioning_uri", "qr_payload",
+            "recovery_codes", "recovery_code", "recovery_code_hashes", "manual_key",
+        }
+        found = set()
+
+        def collect(value):
+            if isinstance(value, dict):
+                found.update(value.get("properties", {}).keys())
+                for child in value.values():
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        collect(schemas)
+        self.assertEqual(set(), found & forbidden)
+        self.assertIn("recovery_codes_generated", schemas["MfaStatusUpdateRequest"]["properties"])
+
+    def test_internal_dns_adapter_and_fake_are_deterministic(self):
+        adapter = self.dns_adapter
+        self.assertEqual("central-internal-only", adapter["visibility"])
+        self.assertIs(adapter["public_api_provider_neutral"], True)
+        self.assertIs(adapter["customer_vps_provider_credentials"], False)
+        self.assertEqual(["A", "AAAA"], adapter["allowed_record_types"])
+        self.assertEqual(
+            {"ensure_record", "observe_record", "delete_owned_record"},
+            set(adapter["operations"]),
+        )
+        fake = adapter["fake_adapter"]
+        self.assertEqual("logical_ticks_starting_at_zero", fake["clock"])
+        self.assertEqual("global_monotonic_call_index", fake["ordering"])
+        self.assertIs(fake["network_access"], False)
+        self.assertEqual(
+            ["pending", "pending", "applied"],
+            fake["scenarios"]["propagation_delay_two_ticks"]["observe_results"],
+        )
+        self.assertEqual(
+            "return_the_original_result_without_incrementing_mutation_count",
+            fake["operation_id_replay"],
+        )
 
 
 if __name__ == "__main__":

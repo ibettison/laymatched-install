@@ -2,17 +2,18 @@
   "openapi": "3.1.0",
   "info": {
     "title": "LayMatched Customer Activation API",
-    "version": "1.0.0-gate2a",
-    "description": "Authoritative Gate 2A integration contract. This contract defines interfaces only; it does not implement licensing, DNS, HTTPS provisioning, onboarding, or MFA."
+    "version": "1.1.0-slice0",
+    "description": "Authoritative activation integration contract. This provider-neutral contract defines interfaces only; it does not implement licensing, DNS, HTTPS provisioning, onboarding, or MFA."
   },
   "servers": [
     {
       "url": "https://auth.matched.laysports.co.uk",
-      "description": "Production authority; implementation is outside Gate 2A"
+      "description": "Production authority; implementation is outside Slice 0"
     }
   ],
   "tags": [
     { "name": "Activation" },
+    { "name": "Activation session" },
     { "name": "Nickname" },
     { "name": "Profile" },
     { "name": "Network" },
@@ -84,6 +85,63 @@
           "400": { "$ref": "#/components/responses/BadRequest" },
           "401": { "$ref": "#/components/responses/InvalidCredential" },
           "403": { "$ref": "#/components/responses/LicenceInactive" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/activation-sessions": {
+      "post": {
+        "operationId": "resumeActivationSession",
+        "summary": "Issue a new short-lived activation session to a registered installation",
+        "description": "Used after browser reload, interruption, JWT expiry, or VPS reboot. The installation identifier selects the registered public key but does not authenticate the caller. The request must be signed by that installation key. A fresh signature nonce is required for every transport retry; an identical Idempotency-Key and body return the original response.",
+        "tags": ["Activation session"],
+        "security": [
+          {
+            "InstallationIdentity": [],
+            "InstallationSignature": []
+          }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/InstallationId" },
+          { "$ref": "#/components/parameters/SignatureTimestamp" },
+          { "$ref": "#/components/parameters/SignatureNonce" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ActivationSessionRequest" },
+              "example": {
+                "activation_id": "a684d7da-70e1-439f-9790-1894ee1a7285"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Short-lived session issued or original idempotent response replayed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActivationSessionResponse" },
+                "example": {
+                  "activation_id": "a684d7da-70e1-439f-9790-1894ee1a7285",
+                  "access_token": "short-lived-jwt",
+                  "expires_in": 900,
+                  "status": "dns_pending",
+                  "next_action": "wait_for_dns",
+                  "server_time": "2026-08-28T12:00:00Z"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/InvalidCredential" },
+          "403": { "$ref": "#/components/responses/LicenceInactive" },
+          "404": { "$ref": "#/components/responses/NotFound" },
           "409": { "$ref": "#/components/responses/Conflict" },
           "422": { "$ref": "#/components/responses/ValidationError" },
           "429": { "$ref": "#/components/responses/RateLimited" },
@@ -276,6 +334,56 @@
         }
       }
     },
+    "/v1/activations/{activation_id}/nickname-reservations/{reservation_id}/renew": {
+      "post": {
+        "operationId": "renewNicknameReservation",
+        "summary": "Renew the authenticated activation's existing nickname reservation",
+        "description": "Extends the same reservation while activation is legitimately pending or retrying. It never changes nickname ownership and cannot revive an expired, released, quarantined, terminal, or differently owned reservation. Once committed, reservation_expires_at is null and renewal is an idempotent no-op.",
+        "tags": ["Nickname"],
+        "security": [
+          {
+            "ActivationToken": [],
+            "InstallationSignature": []
+          }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/ActivationId" },
+          { "$ref": "#/components/parameters/ReservationId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/SignatureTimestamp" },
+          { "$ref": "#/components/parameters/SignatureNonce" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/NicknameReservationRenewalRequest" },
+              "example": { "requested_extension_seconds": 900 }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reservation renewed, already renewed idempotently, or already committed",
+            "headers": { "ETag": { "schema": { "type": "string" } } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NicknameReservationResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/InvalidCredential" },
+          "403": { "$ref": "#/components/responses/LicenceInactive" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
     "/v1/activations/{activation_id}/profile": {
       "patch": {
         "operationId": "updateCustomerProfile",
@@ -334,7 +442,7 @@
       "put": {
         "operationId": "updateActivationNetwork",
         "summary": "Submit signed network state and reachability proof",
-        "description": "The central implementation validates public routability and proof before reconciling DNS. Gate 2A defines only the interface.",
+        "description": "The central implementation validates public routability and proof before reconciling DNS. Slice 0 defines only the interface.",
         "tags": ["Network"],
         "security": [
           {
@@ -567,6 +675,12 @@
         "bearerFormat": "JWT",
         "description": "Short-lived activation-scoped access token."
       },
+      "InstallationIdentity": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Installation-Id",
+        "description": "Public immutable installation identifier used to locate the registered Ed25519 public key. It is not a credential and is accepted only with InstallationSignature."
+      },
       "InstallationSignature": {
         "type": "apiKey",
         "in": "header",
@@ -577,6 +691,19 @@
     "parameters": {
       "ActivationId": {
         "name": "activation_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "uuid" }
+      },
+      "InstallationId": {
+        "name": "X-Installation-Id",
+        "in": "header",
+        "required": true,
+        "description": "Immutable installation UUID. Authentication is provided by the accompanying Ed25519 signature.",
+        "schema": { "type": "string", "format": "uuid" }
+      },
+      "ReservationId": {
+        "name": "reservation_id",
         "in": "path",
         "required": true,
         "schema": { "type": "string", "format": "uuid" }
@@ -692,11 +819,32 @@
           "correlation_id": { "type": "string", "minLength": 8, "maxLength": 128 },
           "retryable": { "type": "boolean" },
           "retry_after": { "type": ["integer", "null"], "minimum": 1 },
-          "details": {
-            "type": "object",
-            "additionalProperties": true
-          }
+          "details": { "$ref": "#/components/schemas/ErrorDetails" }
         }
+      },
+      "ErrorDetails": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": ["bootstrap", "profile", "nickname", "dns", "https", "mfa", "completion"]
+          },
+          "next_action": { "$ref": "#/components/schemas/NextAction" },
+          "field_errors": {
+            "type": "object",
+            "additionalProperties": { "type": "string", "maxLength": 200 }
+          },
+          "unmet_gates": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "enum": ["licence", "profile", "nickname", "dns", "https", "mfa"]
+            }
+          }
+        },
+        "description": "Provider-neutral, customer-safe recovery context. Provider names, identifiers, credentials, request payloads, and raw errors are forbidden."
       },
       "BootstrapRequest": {
         "type": "object",
@@ -729,6 +877,28 @@
           "profile_required": { "type": "boolean" },
           "nickname": { "type": ["string", "null"] },
           "hostname": { "type": ["string", "null"], "format": "hostname" },
+          "next_action": { "$ref": "#/components/schemas/NextAction" },
+          "server_time": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ActivationSessionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["activation_id"],
+        "properties": {
+          "activation_id": { "type": "string", "format": "uuid" }
+        },
+        "description": "Contains no installer credential. The registered installation key authenticates session resumption."
+      },
+      "ActivationSessionResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["activation_id", "access_token", "expires_in", "status", "next_action", "server_time"],
+        "properties": {
+          "activation_id": { "type": "string", "format": "uuid" },
+          "access_token": { "type": "string", "minLength": 1 },
+          "expires_in": { "type": "integer", "minimum": 60, "maximum": 3600 },
+          "status": { "$ref": "#/components/schemas/ActivationState" },
           "next_action": { "$ref": "#/components/schemas/NextAction" },
           "server_time": { "type": "string", "format": "date-time" }
         }
@@ -824,9 +994,18 @@
           "nickname": { "$ref": "#/components/schemas/Nickname" },
           "hostname": { "type": "string", "format": "hostname" },
           "status": { "$ref": "#/components/schemas/ActivationState" },
-          "reservation_expires_at": { "type": "string", "format": "date-time" },
-          "retry_after": { "type": "integer", "minimum": 1 }
+          "reservation_expires_at": { "type": ["string", "null"], "format": "date-time", "description": "Null after hostname ownership is committed." },
+          "retry_after": { "type": ["integer", "null"], "minimum": 1, "description": "Null after hostname ownership is committed." }
         }
+      },
+      "NicknameReservationRenewalRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requested_extension_seconds"],
+        "properties": {
+          "requested_extension_seconds": { "type": "integer", "minimum": 300, "maximum": 1800 }
+        },
+        "description": "The server applies its bounded lease policy; this value cannot create or transfer ownership."
       },
       "NetworkUpdateRequest": {
         "type": "object",
