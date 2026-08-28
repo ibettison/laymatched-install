@@ -12,6 +12,9 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ACTIVATION_STATE_DIR="/var/lib/laymatched/activation"
+INSTALLATION_ID_FILE="/etc/laymatched/installation-id"
 
 log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
@@ -273,6 +276,18 @@ chown root:root /opt/laymatched
 
 log_info "/opt/laymatched created."
 
+# Create the durable local installation identity once. The installer token is
+# deliberately not passed to or retained by this service.
+install -d -o root -g root -m 0700 /etc/laymatched "$ACTIVATION_STATE_DIR"
+if [ ! -f "$INSTALLATION_ID_FILE" ]; then
+    cat /proc/sys/kernel/random/uuid > "$INSTALLATION_ID_FILE"
+    chmod 600 "$INSTALLATION_ID_FILE"
+fi
+INSTALLATION_ID=$(tr -d '\r\n' < "$INSTALLATION_ID_FILE")
+python3 "$SCRIPT_DIR/tools/local_activation.py" --state-dir "$ACTIVATION_STATE_DIR" init "$INSTALLATION_ID" > /dev/null
+install -o root -g root -m 0755 "$SCRIPT_DIR/tools/local_activation.py" /opt/laymatched/local_activation.py
+log_info "Local activation state initialized for resumable installation."
+
 # -- Safe rerun: skip config if already provided ---------------------------
 
 CONFIG_ALREADY_PROVIDED=false
@@ -443,6 +458,7 @@ services:
         condition: service_healthy
     volumes:
       - bookmaker_icon_cache:/var/lib/laymatchedbetting/bookmaker-icons
+      - /var/lib/laymatched/activation:/var/lib/laymatched/activation:ro
     environment:
       - DATABASE_URL=postgresql+psycopg://laymatched:${POSTGRES_PASSWORD}@db:5432/laymatched_betting
       - AUTH_USERNAME=${AUTH_USERNAME}
@@ -451,6 +467,7 @@ services:
       - AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
       - COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY}
       - COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET}
+      - ACTIVATION_STATE_DIR=/var/lib/laymatched/activation
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
       interval: 30s
@@ -571,7 +588,6 @@ else
 fi
 
 # Copy update.sh to installation directory for future updates
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cp "${SCRIPT_DIR}/update.sh" /opt/laymatched/update.sh
 chmod +x /opt/laymatched/update.sh
 log_info "update.sh copied to /opt/laymatched/"
@@ -688,6 +704,7 @@ services:
         condition: service_healthy
     volumes:
       - bookmaker_icon_cache:/var/lib/laymatchedbetting/bookmaker-icons
+      - /var/lib/laymatched/activation:/var/lib/laymatched/activation:ro
     environment:
       - DATABASE_URL=postgresql+psycopg://laymatched:${POSTGRES_PASSWORD}@db:5432/laymatched_betting
       - AUTH_USERNAME=${AUTH_USERNAME}
@@ -696,6 +713,7 @@ services:
       - AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
       - COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY}
       - COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET}
+      - ACTIVATION_STATE_DIR=/var/lib/laymatched/activation
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
       interval: 30s
