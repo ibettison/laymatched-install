@@ -1,3 +1,5 @@
 auth-api/laymatched-auth-api
 deployment/.env
 deployment/certs/
+__pycache__/
+*.py[cod]
