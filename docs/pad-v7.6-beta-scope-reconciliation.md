@@ -34,6 +34,26 @@ run because the repository environment has no usable pytest installation.
 Installer tests passed: 10 tests, and activation contract tests passed:
 19 tests. These results do not constitute customer or production acceptance.
 
+### Dual-audience product positioning
+
+PAD Issue #3 clarification comment `#5614721639` confirms that LayMatched
+explicitly serves two complementary journeys:
+
+- **New to matched betting — “Guide me.”**
+- **Already matched betting — “Organise me.”**
+
+The product principle is: **“Automate the admin. Assist the decisions. You
+place the bets.”** Useful automation therefore means administrative,
+calculation, tracking, and organisation assistance where appropriate—not
+autonomous bet placement. The customer remains responsible for placing bets
+and for the decisions and confirmations that genuinely require their action.
+
+This clarification reinforces the existing beta concerns around A-07 fast
+account onboarding, A-09a balance vigilance, customer UX/contextual guidance,
+account and money management, and experienced-user organisation/workflow.
+It does not introduce new beta features or change release statuses, and does
+not reopen the frozen beta scope.
+
 ## 2. Beta matrix
 
 | Requirement | Current status | Evidence | Missing work | Acceptance needed |
