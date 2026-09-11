@@ -562,3 +562,50 @@ Status:
 Recommended NEXT TASK: **controlled production installation-proof acceptance**,
 under separate Owner-approved production-change controls. Do not begin it in
 this task; PR #24 has not been merged or deployed.
+
+## 13. Post-merge programme update — Gate 1 PR #24 (2026-09-11)
+
+PR #24 has now been merged. Previous PAD entries remain unchanged.
+
+- Gate: **Gate 1 — Installation Proof**
+- PR: `#24`
+- Feature branch: `fix/gate-1-auth-registry-production-bootstrap`
+- Merged PR head: `7c59f02ec031b012f6b4f589ede2a2961f63e0a6`
+- Merge commit on `main`: `444357b39d5dbe3f3883e6b5a08662fd59fe9540`
+- Scope merged: fail-closed Installer `/token` approval checks; root-controlled
+  read-only approval metadata; Owner-only staging publication and verification;
+  post-approval promotion into customer-visible repositories; pull-only,
+  non-staging Installer scope; exact-SHA API/Web release checks; and ephemeral
+  installer Docker credentials.
+- P1-1 resolved: missing, empty, or invalid approval prevents Installer
+  registry JWT issuance; valid approval supports the restricted API/Web pull
+  flow; invalid, revoked, and expired Installer Tokens remain denied; Owner
+  release-management exchange remains scoped and available.
+- P1-2 resolved: approval metadata is outside Auth API writable state, remains
+  root-controlled, and is read-only-mounted to the non-root Auth API; runtime
+  database/key ownership and reserved UID/GID collision checks remain enforced.
+- Release-control finding resolved: candidates remain in Owner-only staging
+  until verification and approval, then are promoted to the customer-visible
+  repositories. Installer Tokens cannot access staging or obtain push/admin
+  scope.
+- Validation before merge: Auth API, focused approval/token/registry,
+  deployment, installer/security, activation, nginx policy, shell syntax,
+  workflow parsing/copy identity, and `git diff --check` all passed. Docker
+  integration assertions remained **UNPROVEN** because the local Docker socket
+  denied Testcontainers initialization.
+- Deployment status: **NOT DEPLOYED**. Read-only host inspection found the
+  running Auth/Registry stack still uses the legacy GHCR/bootstrap compose
+  configuration; the repository has no single production deploy command, and
+  the production approval file is currently absent. No production container,
+  file, DNS record, or certificate was changed.
+
+Gate 1 status:
+
+- **IMPLEMENTED**
+- **TESTED** (all runnable repository checks passed)
+- **MERGED**
+- **NOT YET DEPLOYED / NOT YET PROVEN LIVE**
+
+Recommended NEXT TASK: **controlled production installation-proof acceptance**.
+Before execution, the Owner must explicitly establish the intended production
+Auth/Registry deployment target and approved application release version.
