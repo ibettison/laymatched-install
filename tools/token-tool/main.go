@@ -178,7 +178,7 @@ func issueOwnerToken(name, scopes, notes string, expiresInDays int) error {
 	fmt.Println("Only the bcrypt hash is stored in the database.")
 	fmt.Println()
 	fmt.Println("Use this token for CI/CD registry push operations.")
-	fmt.Println("Scope must include: repository:laymatched-api:push,repository:laymatched-web:push")
+	fmt.Println("Release workflow requires explicit staging and customer repository push/pull scopes")
 
 	return nil
 }
@@ -376,7 +376,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  token-tool issue-installer customer-123 \"Founding member\" --expire-days 365")
-	fmt.Println("  token-tool issue-owner ci-cd \"repository:laymatched-api:push,repository:laymatched-web:push\" \"GitHub Actions\" --expire-days 365")
+	fmt.Println("  token-tool issue-owner ci-cd \"repository:laymatched-api-staging:push,repository:laymatched-api-staging:pull,repository:laymatched-web-staging:push,repository:laymatched-web-staging:pull,repository:laymatched-api:push,repository:laymatched-api:pull,repository:laymatched-web:push,repository:laymatched-web:pull\" \"GitHub Actions\" --expire-days 365")
 	fmt.Println("  token-tool list")
 	fmt.Println("  token-tool revoke-installer 1")
 	fmt.Println("  token-tool revoke-owner 2")

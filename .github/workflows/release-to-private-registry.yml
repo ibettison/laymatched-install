@@ -75,7 +75,7 @@ jobs:
           docker build \
             --label 'org.opencontainers.image.revision=${{ inputs.sha }}' \
             --label 'org.opencontainers.image.source=https://github.com/ibettison/layMatchedBetting' \
-            --tag '${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}' \
+            --tag '${{ inputs.registry_url }}/laymatched-api-staging:${{ inputs.version }}' \
             application/backend
 
       - name: Build Web from exact application SHA
@@ -83,7 +83,7 @@ jobs:
           docker build \
             --label 'org.opencontainers.image.revision=${{ inputs.sha }}' \
             --label 'org.opencontainers.image.source=https://github.com/ibettison/layMatchedBetting' \
-            --tag '${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}' \
+            --tag '${{ inputs.registry_url }}/laymatched-web-staging:${{ inputs.version }}' \
             application/frontend
 
       - name: Verify both local images have the requested revision
@@ -91,44 +91,37 @@ jobs:
         run: |
           set -euo pipefail
           requested_sha='${{ inputs.sha }}'
-          api_sha="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' '${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}')"
-          web_sha="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' '${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}')"
+          api_sha="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' '${{ inputs.registry_url }}/laymatched-api-staging:${{ inputs.version }}')"
+          web_sha="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' '${{ inputs.registry_url }}/laymatched-web-staging:${{ inputs.version }}')"
           test "$api_sha" = "$requested_sha"
           test "$web_sha" = "$requested_sha"
           test "$api_sha" = "$web_sha"
 
-      - name: Log in to private Registry for push
+      - name: Log in to private Registry for owner staging verification
         uses: docker/login-action@v3
         with:
           registry: ${{ inputs.registry_url }}
           username: laymatched-owner
           password: ${{ secrets.OWNER_TOKEN }}
 
-      - name: Push API image
-        run: docker push '${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}'
+      - name: Push API candidate to owner-only staging
+        run: docker push '${{ inputs.registry_url }}/laymatched-api-staging:${{ inputs.version }}'
 
-      - name: Push Web image
-        run: docker push '${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}'
+      - name: Push Web candidate to owner-only staging
+        run: docker push '${{ inputs.registry_url }}/laymatched-web-staging:${{ inputs.version }}'
 
-      - name: Remove local release tags before pull verification
+      - name: Remove local staging tags before owner verification
         run: |
           docker image rm \
-            '${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}' \
-            '${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}'
+            '${{ inputs.registry_url }}/laymatched-api-staging:${{ inputs.version }}' \
+            '${{ inputs.registry_url }}/laymatched-web-staging:${{ inputs.version }}'
 
-      - name: Log in to private Registry for pull verification
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ inputs.registry_url }}
-          username: laymatched-installer
-          password: ${{ secrets.TEST_INSTALLER_TOKEN }}
-
-      - name: Pull and verify both private images
+      - name: Pull and verify both private staging images as Owner
         shell: bash
         run: |
           set -euo pipefail
-          api_ref='${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}'
-          web_ref='${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}'
+          api_ref='${{ inputs.registry_url }}/laymatched-api-staging:${{ inputs.version }}'
+          web_ref='${{ inputs.registry_url }}/laymatched-web-staging:${{ inputs.version }}'
           requested_sha='${{ inputs.sha }}'
           docker pull "$api_ref"
           docker pull "$web_ref"
@@ -158,7 +151,45 @@ jobs:
               mv -f "$tmp_file" "$approval_file"
               trap - EXIT
             '
-            echo 'Approved version updated after both images verified'
+            echo 'Approved version updated before customer-repository promotion'
+
+      - name: Promote approved release images to customer repositories
+        if: ${{ success() && inputs.update_approved_version == true && env.VPS_HOST != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          staging_api='${{ inputs.registry_url }}/laymatched-api-staging:${{ inputs.version }}'
+          staging_web='${{ inputs.registry_url }}/laymatched-web-staging:${{ inputs.version }}'
+          customer_api='${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}'
+          customer_web='${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}'
+          docker tag "$staging_api" "$customer_api"
+          docker tag "$staging_web" "$customer_web"
+          docker push "$customer_api"
+          docker push "$customer_web"
+          echo 'Approved release promoted to customer-visible repositories'
+
+      - name: Log in to private Registry for installer pull verification
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry_url }}
+          username: laymatched-installer
+          password: ${{ secrets.TEST_INSTALLER_TOKEN }}
+
+      - name: Pull and verify both promoted images with Installer Token
+        if: ${{ success() && inputs.update_approved_version == true && env.VPS_HOST != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_ref='${{ inputs.registry_url }}/laymatched-api:${{ inputs.version }}'
+          web_ref='${{ inputs.registry_url }}/laymatched-web:${{ inputs.version }}'
+          requested_sha='${{ inputs.sha }}'
+          docker pull "$api_ref"
+          docker pull "$web_ref"
+          api_sha="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$api_ref")"
+          web_sha="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$web_ref")"
+          test "$api_sha" = "$requested_sha"
+          test "$web_sha" = "$requested_sha"
+          test "$api_sha" = "$web_sha"
 
       - name: Verify approved version is live
         if: ${{ success() && inputs.update_approved_version == true && env.VPS_HOST != '' }}
@@ -184,7 +215,7 @@ jobs:
           echo '## Exact-SHA release published' >> "$GITHUB_STEP_SUMMARY"
           echo 'Application: ibettison/layMatchedBetting@${{ inputs.sha }}' >> "$GITHUB_STEP_SUMMARY"
           echo 'Release: ${{ inputs.version }}' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Both private images built, pushed, pulled, and verified.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Both images were owner-verified in staging, approved, promoted, and installer-pulled from customer repositories.' >> "$GITHUB_STEP_SUMMARY"
 
   notify:
     name: Notify

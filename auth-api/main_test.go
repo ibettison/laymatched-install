@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -294,6 +295,40 @@ func TestTokenServiceWithInstallerToken(t *testing.T) {
 	}
 	if claims["customer_id"] != "customer-1" {
 		t.Errorf("Wrong customer_id: %v", claims["customer_id"])
+	}
+}
+
+func TestInstallerTokenScopeRemainsCustomerPullOnly(t *testing.T) {
+	for _, requestedScope := range []string{
+		"repository:laymatched-api-staging:pull",
+		"repository:laymatched-api:push",
+		"repository:laymatched-web-staging:pull",
+	} {
+		t.Run(requestedScope, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			testDB, cleanup := setupTestDB(t)
+			defer cleanup()
+			db = testDB
+			priv, _ := generateTestKeys(t)
+			privateKey = priv
+			cfg = Config{RegistryURL: "registry.matched.laysports.co.uk", RateLimitPerMin: 1000}
+			approvedVersion = loadApprovedVersion()
+
+			installerToken := "lm_inst_scopecheck123456789012"
+			insertTestToken(t, testDB, "customer-1", installerToken, false, false)
+			router := setupRouter()
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/token?service=registry.matched.laysports.co.uk&scope="+url.QueryEscape(requestedScope), nil)
+			req.Header.Set("Authorization", "Bearer "+installerToken)
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("Expected installer scope %q to be denied with 403, got %d: %s", requestedScope, w.Code, w.Body.String())
+			}
+			if bytes.Contains(w.Body.Bytes(), []byte(installerToken)) || bytes.Contains(w.Body.Bytes(), []byte("eyJ")) {
+				t.Fatalf("Denied scope response leaked a credential: %s", w.Body.String())
+			}
+		})
 	}
 }
 
