@@ -393,7 +393,42 @@ Issue #3 should be corrected as follows:
 - Founding Member Hub is not implemented.
 - Central Recognition is not authoritative or operational.
 - Stripe lifecycle and Owner realistic-data acceptance remain required by PAD.
+
 - Final clean-install, novice-customer, responsive, and production handoff
   acceptance remains outstanding.
 
 M-01 is not a current implementation blocker.
+
+## 10. Dated correction — PR #24 Gate 1 security re-review (2026-09-11)
+
+PAD Issue #3's previous statement that the next task is controlled production
+installation-proof acceptance was premature. PR #24 remains part of Gate 1,
+and production acceptance is still **UNPROVEN**.
+
+PR #24 re-review status:
+
+- Branch: `fix/gate-1-auth-registry-production-bootstrap`
+- Implementation HEAD: `a49594c156508b82d9b70d5f73145ad7bba03094`
+- P1-1 resolved: installer-token `/token` exchanges now re-read and validate
+  the current approval record; missing, empty, and invalid records return
+  503 without issuing a registry JWT. Valid approval retains the restricted
+  LayMatched pull scopes, and unknown, revoked, and expired installer tokens
+  remain rejected.
+- P1-1 owner-path review: owner-token exchanges remain scoped and available
+  for release publication and verification before approval advances; owner
+  revocation and expiry checks remain enforced.
+- P1-2 resolved: approval metadata is migrated to
+  `/opt/laymatched-auth/approval/approved_version.txt`, owned by root and
+  mounted read-only at `/approval`; Auth API runtime state remains in the
+  service-owned data directory, with explicit runtime file modes and reserved
+  UID/GID collision checks. The release workflow writes approval only through
+  its privileged host path, not through the Auth API container.
+- Test evidence: Auth API Go tests, focused approval/token tests, deployment
+  tests, installer/security tests, activation contract tests, nginx policy,
+  shell syntax checks, workflow shell parsing, and `git diff --check` pass.
+  Containerized integration tests could not run because the local Docker API
+  socket is unavailable; production acceptance remains unproven.
+
+Gate 1 remains **IN PROGRESS**. Only after both P1 findings are closed with
+reviewed evidence should the next task become controlled production
+installation-proof acceptance.
