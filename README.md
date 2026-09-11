@@ -112,8 +112,8 @@ sudo ./update.sh v0.1.1         # Upgrade to specific version
 
 The update script:
 - Authenticates to LayMatched authorization service (prompts for Installer Token if not in environment)
-- Retrieves approved release version (unless override specified)
-- Pulls the specified or approved version
+- Retrieves the explicitly approved release version
+- Pulls the approved version (a requested version must match the Auth API approval)
 - Restarts services
 - Runs health checks
 - **Only persists new version to .env after health checks pass**
@@ -123,9 +123,8 @@ The update script:
 
 | Command | Behaviour |
 |---------|-----------|
-| `./update.sh` | Uses current APP_VERSION from .env |
-| `./update.sh v0.1.1` | Pulls v0.1.1; updates .env only on success |
-| `./update.sh latest` | Pulls latest; updates .env only on success |
+| `./update.sh` | Pulls the release currently approved by the Auth API |
+| `./update.sh v0.1.1` | Pulls v0.1.1 only if Auth API currently approves it |
 
 Failed updates leave the previous APP_VERSION intact.
 

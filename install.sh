@@ -20,6 +20,44 @@ log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+# BEGIN EPHEMERAL DOCKER AUTH
+# Docker must never write the Installer Token or registry credentials to the
+# customer's normal/root credential store. This block is also kept in
+# update.sh so older installations can receive the same protection.
+EPHEMERAL_DOCKER_CONFIG_DIR=""
+
+cleanup_ephemeral_docker_auth() {
+    local config_dir="${EPHEMERAL_DOCKER_CONFIG_DIR:-}"
+    if [ -z "$config_dir" ]; then
+        return 0
+    fi
+    case "$config_dir" in
+        /tmp/laymatched-docker-config.*) ;;
+        *)
+            EPHEMERAL_DOCKER_CONFIG_DIR=""
+            unset DOCKER_CONFIG
+            return 0
+            ;;
+    esac
+    rm -rf -- "$config_dir" || true
+    EPHEMERAL_DOCKER_CONFIG_DIR=""
+    unset DOCKER_CONFIG
+}
+
+setup_ephemeral_docker_auth() {
+    EPHEMERAL_DOCKER_CONFIG_DIR="$(mktemp -d /tmp/laymatched-docker-config.XXXXXX)"
+    chmod 700 "$EPHEMERAL_DOCKER_CONFIG_DIR"
+    export DOCKER_CONFIG="$EPHEMERAL_DOCKER_CONFIG_DIR"
+}
+
+install_ephemeral_docker_auth_traps() {
+    trap cleanup_ephemeral_docker_auth EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+}
+# END EPHEMERAL DOCKER AUTH
+
 # -- Helpers ----------------------------------------------------------------
 
 detect_ubuntu_release() {
@@ -66,7 +104,8 @@ generate_secret() {
 }
 
 # -- Auth API: Exchange Installer Token for registry credentials -------------
-# Calls LayMatched Auth API to get short-lived registry token and approved version.
+# Calls LayMatched Auth API to validate the Installer Token and obtain the
+# approved version. Docker exchanges that token for a short-lived registry JWT.
 # Sets: REGISTRY_TOKEN, APPROVED_VERSION, REGISTRY_URL
 
 AUTH_API_URL="https://auth.matched.laysports.co.uk/installer/authorize"
@@ -415,7 +454,10 @@ fi
 
 log_info "Phase 5: Authenticating to LayMatched Container Registry..."
 
-# Authenticate using short-lived registry token from Auth API
+# Use the validated Installer Token in an ephemeral Docker credential store.
+# The registry exchanges it for a short-lived JWT during the image pull.
+install_ephemeral_docker_auth_traps
+setup_ephemeral_docker_auth
 if ! echo "${REGISTRY_TOKEN}" | docker login "${REGISTRY_URL}" -u laymatched-installer --password-stdin > /dev/null 2>&1; then
     log_error "Failed to authenticate to LayMatched Container Registry. Please verify your Installer Token is valid."
 fi

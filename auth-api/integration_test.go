@@ -4,9 +4,7 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -115,8 +113,7 @@ func insertTestTokenForIntegration(t *testing.T, db *sql.DB, customerID, token s
 	if err != nil {
 		t.Fatalf("Hash failed: %v", err)
 	}
-	sum := sha256.Sum256([]byte(token))
-	sha256Hash := hex.EncodeToString(sum[:])
+	sha256Hash := tokenSHA256(token)
 
 	_, err = db.Exec(`
 		INSERT INTO installer_tokens (customer_id, token_sha256, token_hash, notes)
@@ -132,8 +129,7 @@ func insertOwnerTokenForIntegration(t *testing.T, db *sql.DB, name, token, scope
 	if err != nil {
 		t.Fatalf("Hash failed: %v", err)
 	}
-	sum := sha256.Sum256([]byte(token))
-	sha256Hash := hex.EncodeToString(sum[:])
+	sha256Hash := tokenSHA256(token)
 
 	_, err = db.Exec(`
 		INSERT INTO owner_tokens (name, token_sha256, token_hash, scopes, notes)
@@ -245,6 +241,19 @@ func dockerRmi(t *testing.T, image string) {
 }
 
 func registryManifestInspect(t *testing.T, registryURL, registryToken, image string) string {
+	status, body := registryManifestRequest(t, registryURL, registryToken, image)
+	if status != http.StatusOK {
+		t.Fatalf("Expected manifest for %s to be accessible with registry token, got status %d: %s", image, status, string(body))
+	}
+	return string(body)
+}
+
+func registryManifestStatus(t *testing.T, registryURL, registryToken, image string) int {
+	status, _ := registryManifestRequest(t, registryURL, registryToken, image)
+	return status
+}
+
+func registryManifestRequest(t *testing.T, registryURL, registryToken, image string) (int, []byte) {
 	ref := strings.TrimPrefix(image, "http://")
 	idx := strings.Index(ref, "/")
 	if idx < 0 {
@@ -262,10 +271,7 @@ func registryManifestInspect(t *testing.T, registryURL, registryToken, image str
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("Expected manifest for %s to be accessible with registry token, got status %d: %s", repoTag, resp.StatusCode, string(body))
-	}
-	return string(body)
+	return resp.StatusCode, body
 }
 
 func getRegistryChallenge(t *testing.T, registryURL string) string {
@@ -454,10 +460,12 @@ compatibility:
 	// Insert owner token (push and pull)
 	ownerToken := "lm_owner_e2efulltest123456789012"
 	insertOwnerTokenForIntegration(t, db, "ci-cd", ownerToken,
-		"repository:laymatched-api:push,repository:laymatched-web:push,repository:laymatched-api:pull,repository:laymatched-web:pull")
+		"repository:laymatched-api-staging:push,repository:laymatched-api-staging:pull,repository:laymatched-web-staging:push,repository:laymatched-web-staging:pull,repository:laymatched-api:push,repository:laymatched-web:push,repository:laymatched-api:pull,repository:laymatched-web:pull")
 
 	// Test tag unique per run
-	testTag := fmt.Sprintf("e2e-%d", time.Now().UnixNano())
+	testTag := fmt.Sprintf("v0.1.1-e2e-%d", time.Now().UnixNano())
+	stagingAPIImage := fmt.Sprintf("%s/laymatched-api-staging:%s", registryHost, testTag)
+	stagingWebImage := fmt.Sprintf("%s/laymatched-web-staging:%s", registryHost, testTag)
 	apiImage := fmt.Sprintf("%s/laymatched-api:%s", registryHost, testTag)
 	webImage := fmt.Sprintf("%s/laymatched-web:%s", registryHost, testTag)
 
@@ -472,9 +480,9 @@ compatibility:
 	t.Log("  PASS: Registry returns Bearer challenge for unauthenticated access")
 
 	// =================================================================
-	// TEST 2: Get owner token and push images
+	// TEST 2: Get owner token and push candidate images to owner-only staging
 	// =================================================================
-	t.Log("TEST 2: Owner push - laymatched-api and laymatched-web")
+	t.Log("TEST 2: Owner push - laymatched-api-staging and laymatched-web-staging")
 	ownerRegistryToken := getOwnerRegistryToken(t, authAPIURL, registryURL, ownerToken)
 
 	// Login as owner to registry
@@ -488,15 +496,14 @@ compatibility:
 		t.Fatalf("Failed to pull base image: %v\n%s", err, string(output))
 	}
 
-	// Tag and push laymatched-api
-	dockerTag(t, baseImage, apiImage)
-	dockerPush(t, apiImage)
-	t.Logf("  PASS: Pushed %s", apiImage)
+	// Tag and push the candidate only to owner-only staging repositories.
+	dockerTag(t, baseImage, stagingAPIImage)
+	dockerPush(t, stagingAPIImage)
+	t.Logf("  PASS: Pushed %s", stagingAPIImage)
 
-	// Tag and push laymatched-web
-	dockerTag(t, baseImage, webImage)
-	dockerPush(t, webImage)
-	t.Logf("  PASS: Pushed %s", webImage)
+	dockerTag(t, baseImage, stagingWebImage)
+	dockerPush(t, stagingWebImage)
+	t.Logf("  PASS: Pushed %s", stagingWebImage)
 
 	// Verify the owner's registry JWT has direct API access (proof of token exchange)
 	ownerCheckReq, _ := http.NewRequest("GET", registryURL+"/v2/laymatched-api/tags/list", nil)
@@ -512,29 +519,58 @@ compatibility:
 	t.Logf("  PASS: Owner registry JWT grants API access to laymatched-api")
 
 	// =================================================================
-	// TEST 3: Verify images exist in registry (manifest inspect)
+	// TEST 3: Owner verifies candidate images in staging before approval
 	// =================================================================
-	t.Log("TEST 3: Verify images exist in registry")
-	apiManifest := registryManifestInspect(t, registryURL, ownerRegistryToken, apiImage)
+	t.Log("TEST 3: Verify owner-only staging images")
+	apiManifest := registryManifestInspect(t, registryURL, ownerRegistryToken, stagingAPIImage)
 	if !strings.Contains(apiManifest, "schemaVersion") {
-		t.Fatalf("API image manifest doesn't look like a valid manifest")
+		t.Fatalf("API staging image manifest doesn't look like a valid manifest")
 	}
-	t.Logf("  PASS: API image manifest verified")
+	t.Logf("  PASS: API staging image manifest verified")
 
-	webManifest := registryManifestInspect(t, registryURL, ownerRegistryToken, webImage)
+	webManifest := registryManifestInspect(t, registryURL, ownerRegistryToken, stagingWebImage)
 	if !strings.Contains(webManifest, "schemaVersion") {
-		t.Fatalf("Web image manifest doesn't look like a valid manifest")
+		t.Fatalf("Web staging image manifest doesn't look like a valid manifest")
 	}
-	t.Logf("  PASS: Web image manifest verified")
+	t.Logf("  PASS: Web staging image manifest verified")
 
 	// Logout
 	dockerLogout(t, registryURL)
 
 	// =================================================================
-	// TEST 4: Get installer token and pull images
+	// TEST 4: Installer cannot reach an unapproved candidate, then pulls approved promotion
 	// =================================================================
-	t.Log("TEST 4: Installer pull - laymatched-api and laymatched-web")
+	t.Log("TEST 4: Installer denied unapproved candidate, then pulls approved API/Web")
 	installerRegistryToken := getInstallerRegistryToken(t, authAPIURL, registryURL, installerToken)
+	if status := registryManifestStatus(t, registryURL, installerRegistryToken, apiImage); status == http.StatusOK {
+		t.Fatalf("Installer reached unapproved API candidate before promotion")
+	} else if status != http.StatusNotFound {
+		t.Fatalf("Expected unapproved API candidate to be unavailable, got status %d", status)
+	}
+	if status := registryManifestStatus(t, registryURL, installerRegistryToken, webImage); status == http.StatusOK {
+		t.Fatalf("Installer reached unapproved Web candidate before promotion")
+	} else if status != http.StatusNotFound {
+		t.Fatalf("Expected unapproved Web candidate to be unavailable, got status %d", status)
+	}
+	t.Log("  PASS: Installer cannot reach candidate tags before promotion")
+
+	// Approval is advanced before promotion; a failed promotion leaves the
+	// approved tag absent from customer repositories and therefore unusable.
+	if err := os.WriteFile(filepath.Join(dataDir, "approved_version.txt"), []byte(testTag), 0644); err != nil {
+		t.Fatalf("Failed to advance test approval: %v", err)
+	}
+
+	// Only the owner can promote the owner-verified candidate into the
+	// customer-visible repositories.
+	dockerLogin(t, registryURL, "owner", ownerToken)
+	dockerTag(t, stagingAPIImage, apiImage)
+	dockerTag(t, stagingWebImage, webImage)
+	dockerPush(t, apiImage)
+	dockerPush(t, webImage)
+	registryManifestInspect(t, registryURL, ownerRegistryToken, apiImage)
+	registryManifestInspect(t, registryURL, ownerRegistryToken, webImage)
+	t.Log("  PASS: Owner promoted only the approved candidate to customer repositories")
+	dockerLogout(t, registryURL)
 
 	// Login as installer to registry
 	dockerLogin(t, registryURL, "installer", installerToken)
@@ -579,7 +615,7 @@ compatibility:
 	insertTestTokenForIntegration(t, db, "customer-expired", expiredToken)
 	_, err = db.Exec(`
 		UPDATE installer_tokens SET expires_at = datetime('now', '-1 hour') WHERE token_sha256 = ?
-	`, fmt.Sprintf("%x", sha256.Sum256([]byte(expiredToken))))
+	`, tokenSHA256(expiredToken))
 	if err != nil {
 		t.Fatalf("Failed to update token expiry: %v", err)
 	}
@@ -701,6 +737,8 @@ compatibility:
 	dockerLogout(t, registryURL)
 
 	// Clean up test images
+	dockerRmi(t, stagingAPIImage)
+	dockerRmi(t, stagingWebImage)
 	dockerRmi(t, apiImage)
 	dockerRmi(t, webImage)
 
@@ -765,7 +803,7 @@ func TestE2EExpiredRegistryTokenDenied(t *testing.T) {
 
 	_, err := db.Exec(`
 		UPDATE installer_tokens SET expires_at = datetime('now', '-1 hour') WHERE token_sha256 = ?
-	`, fmt.Sprintf("%x", sha256.Sum256([]byte(expiredToken))))
+	`, tokenSHA256(expiredToken))
 	if err != nil {
 		t.Fatalf("Failed to update token expiry: %v", err)
 	}

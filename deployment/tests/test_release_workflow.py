@@ -54,6 +54,8 @@ class ExactShaReleaseWorkflowTest(unittest.TestCase):
             self.assertIn("org.opencontainers.image.revision=${{ inputs.sha }}", command)
         self.assertIn("application/backend", api)
         self.assertIn("application/frontend", web)
+        self.assertIn("laymatched-api-staging", api)
+        self.assertIn("laymatched-web-staging", web)
 
         local_verification = self.steps_by_name[
             "Verify both local images have the requested revision"
@@ -62,28 +64,64 @@ class ExactShaReleaseWorkflowTest(unittest.TestCase):
         self.assertIn('test "$web_sha" = "$requested_sha"', local_verification)
         self.assertIn('test "$api_sha" = "$web_sha"', local_verification)
 
-    def test_private_images_are_removed_pulled_and_revision_verified(self):
+    def test_candidate_is_owner_verified_before_approval_and_customer_pull_after_promotion(self):
         remove_index = self.step_names.index(
-            "Remove local release tags before pull verification"
+            "Remove local staging tags before owner verification"
         )
-        verify_index = self.step_names.index("Pull and verify both private images")
+        verify_index = self.step_names.index("Pull and verify both private staging images as Owner")
         self.assertLess(remove_index, verify_index)
+        approval_index = self.step_names.index("Update approved version on VPS")
+        promote_index = self.step_names.index("Promote approved release images to customer repositories")
+        installer_index = self.step_names.index("Pull and verify both promoted images with Installer Token")
+        self.assertLess(verify_index, approval_index)
+        self.assertLess(approval_index, promote_index)
+        self.assertLess(promote_index, installer_index)
 
-        verification = self.steps_by_name["Pull and verify both private images"]["run"]
+        verification = self.steps_by_name["Pull and verify both private staging images as Owner"]["run"]
         self.assertIn('docker pull "$api_ref"', verification)
         self.assertIn('docker pull "$web_ref"', verification)
         self.assertIn('test "$api_sha" = "$requested_sha"', verification)
         self.assertIn('test "$web_sha" = "$requested_sha"', verification)
         self.assertIn('test "$api_sha" = "$web_sha"', verification)
 
+        promotion = self.steps_by_name["Promote approved release images to customer repositories"]["run"]
+        self.assertIn("laymatched-api-staging", promotion)
+        self.assertIn("laymatched-web-staging", promotion)
+        self.assertIn("laymatched-api:${{ inputs.version }}", promotion)
+        self.assertIn("laymatched-web:${{ inputs.version }}", promotion)
+        self.assertIn('docker push "$customer_api"', promotion)
+        self.assertIn('docker push "$customer_web"', promotion)
+
+        installer_verification = self.steps_by_name[
+            "Pull and verify both promoted images with Installer Token"
+        ]["run"]
+        self.assertIn("laymatched-api:${{ inputs.version }}", installer_verification)
+        self.assertIn("laymatched-web:${{ inputs.version }}", installer_verification)
+        self.assertIn('docker pull "$api_ref"', installer_verification)
+        self.assertIn('docker pull "$web_ref"', installer_verification)
+
+    def test_candidate_is_not_pushed_to_customer_repositories_before_approval(self):
+        approval_index = self.step_names.index("Update approved version on VPS")
+        candidate_pushes = [
+            (index, step["run"])
+            for index, step in enumerate(self.steps)
+            if "Push" in step["name"]
+        ]
+        self.assertTrue(candidate_pushes)
+        for index, command in candidate_pushes:
+            if index < approval_index:
+                self.assertIn("-staging", command)
+                self.assertNotIn("laymatched-api:${{ inputs.version }}", command)
+                self.assertNotIn("laymatched-web:${{ inputs.version }}", command)
+
     def test_either_image_failure_prevents_approval(self):
         approval_index = self.step_names.index("Update approved version on VPS")
         required_steps = (
             "Build API from exact application SHA",
             "Build Web from exact application SHA",
-            "Push API image",
-            "Push Web image",
-            "Pull and verify both private images",
+            "Push API candidate to owner-only staging",
+            "Push Web candidate to owner-only staging",
+            "Pull and verify both private staging images as Owner",
         )
         for name in required_steps:
             step = self.steps_by_name[name]
@@ -95,9 +133,13 @@ class ExactShaReleaseWorkflowTest(unittest.TestCase):
         self.assertNotIn("always()", approval["if"])
         self.assertNotIn("secrets.", approval["if"])
         approval_script = approval["with"]["script"]
-        self.assertIn("docker exec", approval_script)
-        self.assertIn("laymatched-auth-api", approval_script)
-        self.assertIn("/data/approved_version.txt", approval_script)
+        self.assertNotIn("docker exec", approval_script)
+        self.assertIn("sudo env APPROVED_VERSION=", approval_script)
+        self.assertIn("/opt/laymatched-auth/approval", approval_script)
+        self.assertIn("chown root:root", approval_script)
+        self.assertIn("chmod 0644", approval_script)
+        self.assertIn("mv -f", approval_script)
+        self.assertNotIn("/data/approved_version.txt", approval_script)
 
     def test_workflow_does_not_use_mutable_or_prebuilt_source_images(self):
         self.assertNotIn("ref: main", self.text)

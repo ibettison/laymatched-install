@@ -31,7 +31,7 @@ POST https://auth.matched.laysports.co.uk/installer/authorize
 
 ```json
 {
-  "registry_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "registry_token": "lm_inst_abcdef123456...",
   "approved_version": "v0.1.1",
   "registry_url": "registry.matched.laysports.co.uk"
 }
@@ -44,6 +44,12 @@ POST https://auth.matched.laysports.co.uk/installer/authorize
   "error": "invalid credentials"
 }
 ```
+
+`registry_token` is the validated Installer Token returned for the subsequent
+Docker Registry token exchange; it is not itself the short-lived registry JWT.
+Docker sends it to the registry token service, which returns a scoped JWT for
+image pulls. The installer keeps Docker authentication in a temporary
+credential directory and removes it when the operation exits.
 
 ### Health Check
 
@@ -61,7 +67,11 @@ GET https://auth.matched.laysports.co.uk/.well-known/jwks.json
 
 - **URL**: `https://registry.matched.laysports.co.uk`
 - **Auth**: Bearer token (JWT from Auth API)
-- **Scope**: `repository:laymatched-api:pull,repository:laymatched-web:pull`
+- **Installer scope**: `repository:laymatched-api:pull,repository:laymatched-web:pull`
+- **Release flow**: candidates are published to owner-only `laymatched-api-staging`
+  and `laymatched-web-staging` repositories. They are promoted to the
+  customer-visible repositories only after approval. Installer credentials are
+  never granted staging access.
 - **TTL**: 1 hour
 
 ## Token Management
@@ -119,7 +129,8 @@ Only the bcrypt hash is stored in the database.
 
 ```
 /opt/laymatched-auth/
-├── data/              # SQLite DB, RSA keys, approved_version.txt
+├── data/              # Auth API SQLite DB and generated runtime keys
+├── approval/          # root-controlled approved_version.txt (read-only to Auth API)
 ├── docker-compose.yml
 └── .env               # From deployment/.env.example
 
@@ -170,10 +181,18 @@ certbot certonly --nginx -d auth.matched.laysports.co.uk -d registry.matched.lay
 The workflow `.github/workflows/release-to-private-registry.yml` publishes approved releases:
 
 1. Triggers manually with version tag and SHA
-2. Pulls images from GHCR (staging)
-3. Retags for private registry
-4. Pushes to `registry.matched.laysports.co.uk`
-5. Updates `approved_version.txt` on VPS via SSH
+2. Builds exact-SHA API/Web images into owner-only private staging repositories
+3. Pushes and pulls both staging images with the scoped Owner token for verification
+4. Updates the root-controlled `approval/approved_version.txt` on the VPS via the privileged release path
+5. Promotes the verified images into the customer-visible API/Web repositories
+6. Pulls both promoted images with the pull-only Installer Token
+
+The Owner token used by this workflow has explicit push/pull scopes for the two
+staging repositories and explicit push/pull scopes for the two customer-visible
+repositories. It is not a registry administrator credential. Because Docker
+Distribution repository scopes do not express an approved-tag policy, keeping
+unapproved tags out of the customer-visible repositories is the registry-level
+release control.
 
 Required GitHub Secrets:
 - `PRIVATE_REGISTRY_USER` - Registry username
@@ -190,6 +209,7 @@ Required GitHub Secrets:
 - **Logging**: Structured JSON, tokens redacted to prefix only (`lm_inst_****`)
 - **Network**: Internal Docker network, only nginx exposed on 80/443
 - **Keys**: RSA 2048-bit, auto-generated on first run, stored in `/data/`
+- **Release approval**: Owner registry tokens remain available for scoped release publication; Installer-Token pull credentials require a valid approval record. The record is mounted read-only from the root-controlled approval path.
 
 ## Configuration
 
@@ -197,7 +217,7 @@ Required GitHub Secrets:
 |----------|---------|-------------|
 | `PORT` | 8443 | Auth API internal port |
 | `DB_PATH` | /data/auth-tokens.db | SQLite database path |
-| `APPROVED_VERSION` | v0.1.0 | Current approved release version |
+| `APPROVED_VERSION_PATH` | `/data/approved_version.txt` | Trusted approved release record; installer authorization and registry pull-token issuance fail closed when missing, empty, or invalid |
 | `REGISTRY_URL` | registry.matched.laysports.co.uk | Registry hostname |
 | `PRIVATE_KEY_PATH` | /data/private.pem | RSA private key |
 | `PUBLIC_KEY_PATH` | /data/public.pem | RSA public key |

@@ -393,7 +393,172 @@ Issue #3 should be corrected as follows:
 - Founding Member Hub is not implemented.
 - Central Recognition is not authoritative or operational.
 - Stripe lifecycle and Owner realistic-data acceptance remain required by PAD.
+
 - Final clean-install, novice-customer, responsive, and production handoff
   acceptance remains outstanding.
 
 M-01 is not a current implementation blocker.
+
+## 10. Dated correction — PR #24 Gate 1 security re-review (2026-09-11)
+
+PAD Issue #3's previous statement that the next task is controlled production
+installation-proof acceptance was premature. PR #24 remains part of Gate 1,
+and production acceptance is still **UNPROVEN**.
+
+PR #24 re-review status:
+
+- Branch: `fix/gate-1-auth-registry-production-bootstrap`
+- Implementation HEAD: `a49594c156508b82d9b70d5f73145ad7bba03094`
+- P1-1 resolved: installer-token `/token` exchanges now re-read and validate
+  the current approval record; missing, empty, and invalid records return
+  503 without issuing a registry JWT. Valid approval retains the restricted
+  LayMatched pull scopes, and unknown, revoked, and expired installer tokens
+  remain rejected.
+- P1-1 owner-path review: owner-token exchanges remain scoped and available
+  for release publication and verification before approval advances; owner
+  revocation and expiry checks remain enforced.
+- P1-2 resolved: approval metadata is migrated to
+  `/opt/laymatched-auth/approval/approved_version.txt`, owned by root and
+  mounted read-only at `/approval`; Auth API runtime state remains in the
+  service-owned data directory, with explicit runtime file modes and reserved
+  UID/GID collision checks. The release workflow writes approval only through
+  its privileged host path, not through the Auth API container.
+- Test evidence: Auth API Go tests, focused approval/token tests, deployment
+  tests, installer/security tests, activation contract tests, nginx policy,
+  shell syntax checks, workflow shell parsing, and `git diff --check` pass.
+  Containerized integration tests could not run because the local Docker API
+  socket is unavailable; production acceptance remains unproven.
+
+Gate 1 remains **IN PROGRESS**. Only after both P1 findings are closed with
+reviewed evidence should the next task become controlled production
+installation-proof acceptance.
+
+## 11. Dated correction — PR #24 release-control re-review (2026-09-11)
+
+This update supersedes the release-control status in the preceding PR #24
+correction while preserving that historical entry. PAD Issue #3 is now
+current for PR #24 HEAD `760be8e`.
+
+PR #24:
+
+- Branch: `fix/gate-1-auth-registry-production-bootstrap`
+- Current HEAD: `760be8e`
+- P1-1 remains resolved: Installer-Token `/token` issuance re-reads and
+  validates the current approval record and fails closed with no registry JWT
+  when the record is missing, empty, or invalid. Valid approval retains only
+  the LayMatched API/Web pull scopes; unknown, revoked, and expired Installer
+  Tokens remain rejected. Owner release-management exchange remains available
+  under its explicit Owner scopes.
+- P1-2 remains resolved: `approved_version.txt` is root-controlled at the
+  separate `/opt/laymatched-auth/approval` path, mounted read-only into Auth
+  API. Runtime SQLite/key state remains service-writable only where required,
+  and reserved UID/GID collision checks remain enforced.
+- Release-control finding resolved: Docker Distribution repository scopes do
+  not constrain a tag, so release candidates now publish only to the
+  owner-scoped `laymatched-api-staging` and `laymatched-web-staging`
+  repositories. The Owner verifies both candidates there; only then does the
+  privileged approval update run, followed by Owner promotion into the
+  customer-visible API/Web repositories. Installer credentials receive no
+  staging or push scope and can pull the candidate only after promotion.
+- Focused evidence covers approved API/Web Installer pulls, unavailable
+  unapproved candidate tags before promotion, missing/empty/invalid approval,
+  Owner publication/verification, invalid/revoked/expired Installer Tokens,
+  and pull-only customer scope.
+- Validation: Auth API Go tests pass (`go test ./...`, 16.4s); deployment tests
+  pass (23); installer/security tests pass (12); activation contract tests
+  pass (19); registry nginx policy, shell syntax, workflow parsing, workflow
+  copy identity, and `git diff --check` pass. Docker-backed integration tests
+  were attempted but remain UNPROVEN because the local Docker API socket is
+  inaccessible (`/var/run/docker.sock` permission denied). Token-tool tests
+  were also unavailable locally because this environment has Go 1.22.2 while
+  that module requires Go 1.23.
+
+Gate 1 remains **IN PROGRESS**. Production installation-proof acceptance and
+direct production-registry confirmation remain **UNPROVEN**; no production
+system was contacted or changed.
+
+NEXT TASK: controlled production installation-proof acceptance, after the
+required merge approval and under the separate production-change controls.
+
+## 12. Dated final verification — Gate 1 PR #24 (2026-09-11)
+
+This is a new programme-control update; previous PAD history is retained.
+
+### Gate 1 — Installation Proof
+
+PR #24: `#24`
+
+Branch: `fix/gate-1-auth-registry-production-bootstrap`
+
+Current HEAD: `1f8465c560369d4e0920f37485aa089fa4e871a5`
+
+Scope completed:
+
+- Installer `/token` issuance fails closed when `approved_version.txt` is
+  missing, empty, or invalid.
+- Approval metadata is separated from Auth API runtime state, root-controlled,
+  and mounted read-only to the non-root Auth API service.
+- Release candidates are built, pushed, and Owner-verified in owner-only
+  staging repositories before approval.
+- Only approved candidates are promoted into customer-visible API/Web
+  repositories. Installer credentials have no staging or push scope.
+- Exact application SHA labels are checked for both API and Web images at
+  build, staging verification, and post-promotion Installer pull steps.
+
+Previous P1 findings:
+
+- P1-1: resolved. Installer-token `/token` checks the current approved release
+  and issues no pull JWT when approval is unavailable. Valid approval preserves
+  the restricted API/Web pull scope; invalid, revoked, and expired Installer
+  Tokens remain denied. Owner release-management exchange remains available
+  under explicit Owner scopes.
+- P1-2: resolved. `approved_version.txt` is root-owned under the separate
+  `/opt/laymatched-auth/approval` path and read-only-mounted into Auth API.
+  SQLite/generated-key runtime state retains only required service write access;
+  reserved UID/GID collision checks remain active.
+
+Release-control finding:
+
+- Resolved. Docker Distribution repository scopes do not constrain tags, so
+  unapproved candidates are never placed in customer-visible repositories.
+  Owner staging publication and verification precede the privileged approval
+  update; Owner promotion follows approval. Installer scope remains pull-only
+  for the approved customer API/Web repositories.
+
+Validation evidence:
+
+- Auth API Go tests: PASS — `GOCACHE=/tmp/laymatched-install-go-cache go test
+  ./...`.
+- Focused approval/token/registry tests: PASS, including valid approved flow,
+  missing/empty/invalid approval fail-closed, invalid/revoked/expired token
+  rejection, staging/push scope denial, and no credential leakage.
+- Release workflow/deployment tests: PASS — 23 tests.
+- Installer/security tests: PASS — 12 tests.
+- Activation contract tests: PASS — 19 tests.
+- Nginx/deployment policy: PASS.
+- Shell syntax checks: PASS.
+- GitHub workflow YAML and embedded shell parsing: PASS.
+- Canonical and deployment workflow copies: identical.
+- `git diff --check`: PASS.
+- Docker-backed integration suite: NOT RUN / UNPROVEN. The command was
+  attempted, but every Testcontainers case stopped before setup because
+  `/var/run/docker.sock` returned permission denied. No registry or production
+  endpoint was contacted.
+
+Security review: customers cannot access staging repositories through the
+Installer scope; Installer Tokens cannot obtain push or administration scope;
+Owner staging publication and promotion remain scoped; Auth API cannot alter
+the trusted approval file; installer/registry credentials remain ephemeral and
+are cleaned up; and no secrets are exposed in logs or repository content.
+
+Status:
+
+- Gate 1: **IMPLEMENTED**
+- Gate 1: **TESTED** (all runnable repository checks pass)
+- Gate 1: **NOT YET DEPLOYED / NOT YET PROVEN LIVE**
+- Production installation-proof and direct production registry confirmation
+  remain **UNPROVEN** by design.
+
+Recommended NEXT TASK: **controlled production installation-proof acceptance**,
+under separate Owner-approved production-change controls. Do not begin it in
+this task; PR #24 has not been merged or deployed.

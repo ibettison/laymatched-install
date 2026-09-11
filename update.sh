@@ -17,8 +17,47 @@ log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+# BEGIN EPHEMERAL DOCKER AUTH
+# Keep registry credentials out of the customer's normal/root Docker
+# credential store. This is intentionally self-contained for older installs
+# whose copied update.sh predates the helper changes.
+EPHEMERAL_DOCKER_CONFIG_DIR=""
+
+cleanup_ephemeral_docker_auth() {
+    local config_dir="${EPHEMERAL_DOCKER_CONFIG_DIR:-}"
+    if [ -z "$config_dir" ]; then
+        return 0
+    fi
+    case "$config_dir" in
+        /tmp/laymatched-docker-config.*) ;;
+        *)
+            EPHEMERAL_DOCKER_CONFIG_DIR=""
+            unset DOCKER_CONFIG
+            return 0
+            ;;
+    esac
+    rm -rf -- "$config_dir" || true
+    EPHEMERAL_DOCKER_CONFIG_DIR=""
+    unset DOCKER_CONFIG
+}
+
+setup_ephemeral_docker_auth() {
+    EPHEMERAL_DOCKER_CONFIG_DIR="$(mktemp -d /tmp/laymatched-docker-config.XXXXXX)"
+    chmod 700 "$EPHEMERAL_DOCKER_CONFIG_DIR"
+    export DOCKER_CONFIG="$EPHEMERAL_DOCKER_CONFIG_DIR"
+}
+
+install_ephemeral_docker_auth_traps() {
+    trap cleanup_ephemeral_docker_auth EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+}
+# END EPHEMERAL DOCKER AUTH
+
 # -- Auth API: Exchange Installer Token for registry credentials -------------
-# Calls LayMatched Auth API to get short-lived registry token and approved version.
+# Calls LayMatched Auth API to validate the Installer Token and obtain the
+# approved version. Docker exchanges that token for a short-lived registry JWT.
 # Sets: REGISTRY_TOKEN, APPROVED_VERSION, REGISTRY_URL
 
 AUTH_API_URL="https://auth.matched.laysports.co.uk/installer/authorize"
@@ -91,9 +130,9 @@ if [ ! -f /opt/laymatched/.env ]; then
 fi
 
 # -- Parse version override argument --------------------------------------
-# Usage: update.sh [NEW_VERSION]
-# If NEW_VERSION is provided, use it for this update and persist on success.
-# If not provided, use current APP_VERSION from .env.
+# Usage: update.sh [APPROVED_VERSION]
+# An optional version is accepted only when it matches the version returned by
+# the Auth API; customers cannot use this script to bypass release approval.
 
 NEW_VERSION_ARG="${1:-}"
 
@@ -105,7 +144,7 @@ CURRENT_REGISTRY_URL=$(grep '^REGISTRY_URL=' /opt/laymatched/.env | cut -d'=' -f
 if [ -n "$NEW_VERSION_ARG" ]; then
     # Validate version argument using the same validation function
     if ! validate_version "$NEW_VERSION_ARG"; then
-        log_error "Invalid version format: '$NEW_VERSION_ARG'. Use a valid tag like 'v0.1.1' or 'latest'."
+        log_error "Invalid version format: '$NEW_VERSION_ARG'. Use a valid release tag like 'v0.1.1'."
     fi
     APP_VERSION="$NEW_VERSION_ARG"
     log_info "Version override specified: $APP_VERSION (current: $CURRENT_APP_VERSION)"
@@ -135,10 +174,14 @@ fi
 # Call Auth API to get registry credentials and approved version
 call_auth_api "$INSTALLER_TOKEN"
 
-# Determine candidate version: override if provided, else approved from API
+# Determine candidate version. Any requested override must still be explicitly
+# approved by the Auth API.
 if [ -n "$NEW_VERSION_ARG" ]; then
-    CANDIDATE_VERSION="$NEW_VERSION_ARG"
-    log_info "Version override specified: $CANDIDATE_VERSION (current: $CURRENT_APP_VERSION)"
+    if [ "$NEW_VERSION_ARG" != "$APPROVED_VERSION" ]; then
+        log_error "Requested version is not the currently approved LayMatched release."
+    fi
+    CANDIDATE_VERSION="$APPROVED_VERSION"
+    log_info "Requested version is approved: $CANDIDATE_VERSION (current: $CURRENT_APP_VERSION)"
 else
     CANDIDATE_VERSION="${APPROVED_VERSION}"
     log_info "Using approved version from authorization service: ${CANDIDATE_VERSION}"
@@ -151,7 +194,10 @@ CANDIDATE_REGISTRY_URL="${REGISTRY_URL}"
 
 log_info "Authenticating to LayMatched Container Registry..."
 
-# Authenticate using short-lived registry token from Auth API
+# Use the validated Installer Token in an ephemeral Docker credential store.
+# The registry exchanges it for a short-lived JWT during the image pull.
+install_ephemeral_docker_auth_traps
+setup_ephemeral_docker_auth
 if ! echo "${REGISTRY_TOKEN}" | docker login "${REGISTRY_URL}" -u laymatched-installer --password-stdin > /dev/null 2>&1; then
     log_error "Failed to authenticate to LayMatched Container Registry. Please verify your Installer Token is valid."
 fi

@@ -45,22 +45,22 @@ class HostNginxConfigTest(unittest.TestCase):
         self.assertNotRegex(self.auth, r"location\s+/health\s*\{")
         self.assertNotRegex(self.auth, r"location\s+/\.well-known/jwks\.json\s*\{")
 
-    def test_registry_root_is_exact_and_catch_all_is_rate_limited(self):
-        registry_root = location_body(self.registry, "=", "/v2/")
+    def test_registry_api_prefix_is_unlimited_and_catch_all_is_rate_limited(self):
+        registry_root = location_body(self.registry, "", "/v2/")
         catch_all_locations = location_bodies(self.registry, "", "/")
 
         self.assertNotIn("limit_req", registry_root)
         self.assertTrue(
             any("limit_req zone=registry_limit" in body for body in catch_all_locations)
         )
-        self.assertNotRegex(self.registry, r"location\s+/v2/\s*\{")
+        self.assertNotRegex(self.registry, r"location\s+=\s+/v2/\s*\{")
 
     def test_all_proxy_destinations_are_loopback_and_not_duplicated(self):
         expected = {
             self.auth: ("http://127.0.0.1:8443", 3),
             self.registry: ("http://127.0.0.1:5000", 2),
             self.bootstrap_auth: ("http://127.0.0.1:8443", 1),
-            self.bootstrap_registry: ("http://127.0.0.1:5000", 1),
+            self.bootstrap_registry: ("http://127.0.0.1:5000", 2),
         }
         for config, (upstream, count) in expected.items():
             proxy_passes = re.findall(r"proxy_pass\s+([^;]+);", config)
