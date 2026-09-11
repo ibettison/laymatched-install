@@ -4,7 +4,9 @@
 
 set -euo pipefail
 
-# All directories root:root - laymatched-deploy has NO write access
+# Production services do not run as root. The Auth API runs as UID/GID
+# 1000:1000 and needs write access to its SQLite database and signing keys;
+# registry data remains root-owned. laymatched-deploy has NO write access.
 DIRS=(
     "/opt/laymatched-auth"
     "/opt/laymatched-auth/data"
@@ -14,13 +16,19 @@ DIRS=(
 
 for d in "${DIRS[@]}"; do
     mkdir -p "$d"
-    chown root:root "$d"
+    if [ "$d" = "/opt/laymatched-auth/data" ]; then
+        chown -R 1000:1000 "$d"
+        owner="1000:1000"
+    else
+        chown root:root "$d"
+        owner="root:root"
+    fi
     chmod 750 "$d"
-    echo "Prepared $d (root:root 750)"
+    echo "Prepared $d (${owner} 750)"
 done
 
 # Parent directories world-readable but not writable by laymatched-deploy
 chmod 755 /opt/laymatched-auth /opt/laymatched-registry
 
-echo "All directories created with root:root ownership"
+echo "Auth API data is writable only by UID/GID 1000:1000"
 echo "laymatched-deploy has NO direct write access to production paths"

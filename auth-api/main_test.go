@@ -25,6 +25,11 @@ import (
 func setupTestDB(t *testing.T) (*sql.DB, func()) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
+	approvedVersionPath = filepath.Join(tmpDir, "approved_version.txt")
+	if err := os.WriteFile(approvedVersionPath, []byte("v0.1.0"), 0644); err != nil {
+		t.Fatalf("Approved version setup failed: %v", err)
+	}
+	approvedVersion = loadApprovedVersion()
 
 	db, err := sql.Open("sqlite3", dbPath+"?_fk=1&_journal_mode=WAL")
 	if err != nil {
@@ -97,17 +102,17 @@ func insertTestToken(t *testing.T, db *sql.DB, customerID, token string, revoked
 // with the token-tool's base64 representation.
 func TestTokenSHA256Consistency(t *testing.T) {
 	token := "lm_inst_testtoken12345678901234"
-	
+
 	// Expected hash (computed using base64.RawURLEncoding on SHA256 of token)
 	sum := sha256.Sum256([]byte(token))
 	expected := base64.RawURLEncoding.EncodeToString(sum[:])
-	
+
 	actual := tokenSHA256(token)
-	
+
 	if actual != expected {
 		t.Errorf("Expected %s, got %s", expected, actual)
 	}
-	
+
 	if len(actual) != 43 {
 		t.Errorf("Expected length 43, got %d", len(actual))
 	}
@@ -578,6 +583,66 @@ func TestApprovedVersionChange(t *testing.T) {
 	}
 	if resp2.ApprovedVersion != "v0.2.0" {
 		t.Errorf("Second response wrong version: %s", resp2.ApprovedVersion)
+	}
+}
+
+func TestAuthorizeFailsClosedWithoutApprovedRelease(t *testing.T) {
+	cases := []struct {
+		name       string
+		hasFile    bool
+		contents   string
+		wantStatus int
+	}{
+		{name: "missing", wantStatus: http.StatusServiceUnavailable},
+		{name: "empty", hasFile: true, contents: "", wantStatus: http.StatusServiceUnavailable},
+		{name: "invalid", hasFile: true, contents: "latest", wantStatus: http.StatusServiceUnavailable},
+		{name: "valid", hasFile: true, contents: "v0.2.0", wantStatus: http.StatusOK},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			testDB, cleanup := setupTestDB(t)
+			defer cleanup()
+			db = testDB
+			priv, pub := generateTestKeys(t)
+			privateKey = priv
+			publicKey = pub
+			cfg = Config{
+				RegistryURL:     "registry.matched.laysports.co.uk",
+				RateLimitPerMin: 1000,
+			}
+
+			versionPath := filepath.Join(t.TempDir(), "approved_version.txt")
+			if tc.hasFile {
+				if err := os.WriteFile(versionPath, []byte(tc.contents), 0644); err != nil {
+					t.Fatalf("Approved version setup failed: %v", err)
+				}
+			}
+			approvedVersionPath = versionPath
+			approvedVersion = loadApprovedVersion()
+
+			token := "lm_inst_approvaltest1234567890"
+			insertTestToken(t, testDB, "customer-1", token, false, false)
+			router := setupRouter()
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("POST", "/installer/authorize", bytes.NewBufferString(`{"installer_token":"`+token+`"}`))
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(w, req)
+
+			if w.Code != tc.wantStatus {
+				t.Fatalf("Expected %d, got %d: %s", tc.wantStatus, w.Code, w.Body.String())
+			}
+			if tc.name == "valid" {
+				var resp AuthorizeResponse
+				if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("Invalid JSON: %v", err)
+				}
+				if resp.ApprovedVersion != tc.contents {
+					t.Fatalf("Expected approved version %q, got %q", tc.contents, resp.ApprovedVersion)
+				}
+			}
+		})
 	}
 }
 

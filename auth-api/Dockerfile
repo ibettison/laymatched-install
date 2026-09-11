@@ -18,11 +18,11 @@ WORKDIR /app
 
 COPY --from=builder /app/auth-api .
 
-RUN mkdir -p /data && chmod 750 /data
+RUN mkdir -p /data && chown 1000:1000 /data && chmod 750 /data
 
 ENV PORT=8443 \
     DB_PATH=/data/auth-tokens.db \
-    REGISTRY_URL=registry.laymatched.io \
+    REGISTRY_URL=registry.matched.laysports.co.uk \
     PRIVATE_KEY_PATH=/data/private.pem \
     PUBLIC_KEY_PATH=/data/public.pem \
     REGISTRY_PUBLIC_KEY_PATH=/data/auth-public.pem \

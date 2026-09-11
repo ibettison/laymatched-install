@@ -31,7 +31,7 @@ POST https://auth.matched.laysports.co.uk/installer/authorize
 
 ```json
 {
-  "registry_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "registry_token": "lm_inst_abcdef123456...",
   "approved_version": "v0.1.1",
   "registry_url": "registry.matched.laysports.co.uk"
 }
@@ -44,6 +44,12 @@ POST https://auth.matched.laysports.co.uk/installer/authorize
   "error": "invalid credentials"
 }
 ```
+
+`registry_token` is the validated Installer Token returned for the subsequent
+Docker Registry token exchange; it is not itself the short-lived registry JWT.
+Docker sends it to the registry token service, which returns a scoped JWT for
+image pulls. The installer keeps Docker authentication in a temporary
+credential directory and removes it when the operation exits.
 
 ### Health Check
 
@@ -197,7 +203,7 @@ Required GitHub Secrets:
 |----------|---------|-------------|
 | `PORT` | 8443 | Auth API internal port |
 | `DB_PATH` | /data/auth-tokens.db | SQLite database path |
-| `APPROVED_VERSION` | v0.1.0 | Current approved release version |
+| `approved_version.txt` | required in `/data` | Explicitly approved release version; authorization fails closed when missing, empty, or invalid |
 | `REGISTRY_URL` | registry.matched.laysports.co.uk | Registry hostname |
 | `PRIVATE_KEY_PATH` | /data/private.pem | RSA private key |
 | `PUBLIC_KEY_PATH` | /data/public.pem | RSA public key |
