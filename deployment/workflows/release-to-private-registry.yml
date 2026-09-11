@@ -146,10 +146,18 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            sudo docker exec -u 0 \
-              -e APPROVED_VERSION='${{ inputs.version }}' \
-              laymatched-auth-api \
-              sh -c 'printf "%s\n" "$APPROVED_VERSION" > /data/approved_version.txt'
+            sudo env APPROVED_VERSION='${{ inputs.version }}' sh -c '
+              set -eu
+              approval_dir=/opt/laymatched-auth/approval
+              approval_file="$approval_dir/approved_version.txt"
+              tmp_file="$(mktemp "$approval_dir/.approved_version.XXXXXX")"
+              trap "rm -f \"$tmp_file\"" EXIT
+              printf "%s\\n" "$APPROVED_VERSION" > "$tmp_file"
+              chown root:root "$tmp_file"
+              chmod 0644 "$tmp_file"
+              mv -f "$tmp_file" "$approval_file"
+              trap - EXIT
+            '
             echo 'Approved version updated after both images verified'
 
       - name: Verify approved version is live

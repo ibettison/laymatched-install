@@ -95,9 +95,13 @@ class ExactShaReleaseWorkflowTest(unittest.TestCase):
         self.assertNotIn("always()", approval["if"])
         self.assertNotIn("secrets.", approval["if"])
         approval_script = approval["with"]["script"]
-        self.assertIn("docker exec", approval_script)
-        self.assertIn("laymatched-auth-api", approval_script)
-        self.assertIn("/data/approved_version.txt", approval_script)
+        self.assertNotIn("docker exec", approval_script)
+        self.assertIn("sudo env APPROVED_VERSION=", approval_script)
+        self.assertIn("/opt/laymatched-auth/approval", approval_script)
+        self.assertIn("chown root:root", approval_script)
+        self.assertIn("chmod 0644", approval_script)
+        self.assertIn("mv -f", approval_script)
+        self.assertNotIn("/data/approved_version.txt", approval_script)
 
     def test_workflow_does_not_use_mutable_or_prebuilt_source_images(self):
         self.assertNotIn("ref: main", self.text)

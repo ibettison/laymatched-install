@@ -125,7 +125,8 @@ Only the bcrypt hash is stored in the database.
 
 ```
 /opt/laymatched-auth/
-├── data/              # SQLite DB, RSA keys, approved_version.txt
+├── data/              # Auth API SQLite DB and generated runtime keys
+├── approval/          # root-controlled approved_version.txt (read-only to Auth API)
 ├── docker-compose.yml
 └── .env               # From deployment/.env.example
 
@@ -179,7 +180,7 @@ The workflow `.github/workflows/release-to-private-registry.yml` publishes appro
 2. Pulls images from GHCR (staging)
 3. Retags for private registry
 4. Pushes to `registry.matched.laysports.co.uk`
-5. Updates `approved_version.txt` on VPS via SSH
+5. Updates the root-controlled `approval/approved_version.txt` on the VPS via the privileged release path
 
 Required GitHub Secrets:
 - `PRIVATE_REGISTRY_USER` - Registry username
@@ -196,6 +197,7 @@ Required GitHub Secrets:
 - **Logging**: Structured JSON, tokens redacted to prefix only (`lm_inst_****`)
 - **Network**: Internal Docker network, only nginx exposed on 80/443
 - **Keys**: RSA 2048-bit, auto-generated on first run, stored in `/data/`
+- **Release approval**: Owner registry tokens remain available for scoped release publication; Installer-Token pull credentials require a valid approval record. The record is mounted read-only from the root-controlled approval path.
 
 ## Configuration
 
@@ -203,7 +205,7 @@ Required GitHub Secrets:
 |----------|---------|-------------|
 | `PORT` | 8443 | Auth API internal port |
 | `DB_PATH` | /data/auth-tokens.db | SQLite database path |
-| `approved_version.txt` | required in `/data` | Explicitly approved release version; authorization fails closed when missing, empty, or invalid |
+| `APPROVED_VERSION_PATH` | `/data/approved_version.txt` | Trusted approved release record; installer authorization and registry pull-token issuance fail closed when missing, empty, or invalid |
 | `REGISTRY_URL` | registry.matched.laysports.co.uk | Registry hostname |
 | `PRIVATE_KEY_PATH` | /data/private.pem | RSA private key |
 | `PUBLIC_KEY_PATH` | /data/public.pem | RSA public key |

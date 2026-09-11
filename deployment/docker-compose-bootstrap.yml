@@ -8,6 +8,7 @@ services:
     environment:
       - PORT=8443
       - DB_PATH=/data/auth-tokens.db
+      - APPROVED_VERSION_PATH=/approval/approved_version.txt
       - REGISTRY_URL=registry.matched.laysports.co.uk
       - PRIVATE_KEY_PATH=/data/private.pem
       - PUBLIC_KEY_PATH=/data/public.pem
@@ -18,6 +19,7 @@ services:
       - TRUSTED_PROXIES=127.0.0.1
     volumes:
       - auth-data:/data
+      - approval-data:/approval:ro
     networks:
       - laymatched-internal
       - laymatched-host-access
@@ -58,6 +60,12 @@ volumes:
     driver_opts:
       type: none
       device: /opt/laymatched-auth/data
+      o: bind
+  approval-data:
+    driver: local
+    driver_opts:
+      type: none
+      device: /opt/laymatched-auth/approval
       o: bind
   registry-data:
     driver: local

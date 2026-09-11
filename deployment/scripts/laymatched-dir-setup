@@ -11,6 +11,11 @@ set -euo pipefail
 AUTH_SERVICE_UID=2001
 AUTH_SERVICE_GID=2001
 
+AUTH_ROOT="/opt/laymatched-auth"
+AUTH_DATA_DIR="${AUTH_ROOT}/data"
+AUTH_APPROVAL_DIR="${AUTH_ROOT}/approval"
+AUTH_APPROVAL_FILE="${AUTH_APPROVAL_DIR}/approved_version.txt"
+
 if getent passwd "$AUTH_SERVICE_UID" >/dev/null 2>&1; then
     echo "Refusing to use occupied Auth API UID $AUTH_SERVICE_UID" >&2
     exit 1
@@ -26,16 +31,33 @@ if id -u laymatched-deploy >/dev/null 2>&1; then
     fi
 fi
 DIRS=(
-    "/opt/laymatched-auth"
-    "/opt/laymatched-auth/data"
+    "${AUTH_ROOT}"
+    "${AUTH_DATA_DIR}"
+    "${AUTH_APPROVAL_DIR}"
     "/opt/laymatched-registry"
     "/opt/laymatched-registry/data"
 )
 
+mkdir -p "${AUTH_DATA_DIR}" "${AUTH_APPROVAL_DIR}"
+
+# Migrate the old approval location before making the runtime data directory
+# service-writable. Refuse to choose between two different approval records.
+if [ -e "${AUTH_DATA_DIR}/approved_version.txt" ]; then
+    if [ -e "${AUTH_APPROVAL_FILE}" ]; then
+        if [ ! -f "${AUTH_APPROVAL_FILE}" ] || ! cmp -s "${AUTH_DATA_DIR}/approved_version.txt" "${AUTH_APPROVAL_FILE}"; then
+            echo "Refusing to migrate conflicting approved release records" >&2
+            exit 1
+        fi
+        rm -f "${AUTH_DATA_DIR}/approved_version.txt"
+    else
+        mv "${AUTH_DATA_DIR}/approved_version.txt" "${AUTH_APPROVAL_FILE}"
+    fi
+fi
+
 for d in "${DIRS[@]}"; do
     mkdir -p "$d"
-    if [ "$d" = "/opt/laymatched-auth/data" ]; then
-        chown -R "${AUTH_SERVICE_UID}:${AUTH_SERVICE_GID}" "$d"
+    if [ "$d" = "${AUTH_DATA_DIR}" ]; then
+        chown "${AUTH_SERVICE_UID}:${AUTH_SERVICE_GID}" "$d"
         owner="${AUTH_SERVICE_UID}:${AUTH_SERVICE_GID}"
     else
         chown root:root "$d"
@@ -47,6 +69,32 @@ done
 
 # Parent directories world-readable but not writable by laymatched-deploy
 chmod 755 /opt/laymatched-auth /opt/laymatched-registry
+# The Auth API needs to traverse this root-owned directory to read approval;
+# it must not be able to create, replace, or delete entries inside it.
+chmod 755 "${AUTH_APPROVAL_DIR}"
+
+# Only known Auth API runtime files receive service ownership. The approval
+# directory and file remain root-owned, outside this writable state tree.
+for f in auth-tokens.db auth-tokens.db-wal auth-tokens.db-shm private.pem; do
+    path="${AUTH_DATA_DIR}/${f}"
+    if [ -e "$path" ]; then
+        chown "${AUTH_SERVICE_UID}:${AUTH_SERVICE_GID}" "$path"
+        chmod 600 "$path"
+    fi
+done
+for f in public.pem auth-public.pem auth-cert.pem; do
+    path="${AUTH_DATA_DIR}/${f}"
+    if [ -e "$path" ]; then
+        chown "${AUTH_SERVICE_UID}:${AUTH_SERVICE_GID}" "$path"
+        chmod 644 "$path"
+    fi
+done
+
+if [ -e "${AUTH_APPROVAL_FILE}" ]; then
+    chown root:root "${AUTH_APPROVAL_FILE}"
+    chmod 644 "${AUTH_APPROVAL_FILE}"
+fi
 
 echo "Auth API data is writable only by reserved UID/GID ${AUTH_SERVICE_UID}:${AUTH_SERVICE_GID}"
+echo "Approved release metadata is root-owned at ${AUTH_APPROVAL_FILE}"
 echo "laymatched-deploy has NO direct write access to production paths"

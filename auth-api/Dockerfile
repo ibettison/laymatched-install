@@ -22,6 +22,7 @@ RUN mkdir -p /data && chown 2001:2001 /data && chmod 750 /data
 
 ENV PORT=8443 \
     DB_PATH=/data/auth-tokens.db \
+    APPROVED_VERSION_PATH=/data/approved_version.txt \
     REGISTRY_URL=registry.matched.laysports.co.uk \
     PRIVATE_KEY_PATH=/data/private.pem \
     PUBLIC_KEY_PATH=/data/public.pem \

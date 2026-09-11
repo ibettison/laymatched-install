@@ -50,6 +50,7 @@ var approvedVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[._-
 type Config struct {
 	Port                  string
 	DBPath                string
+	ApprovedVersionPath   string
 	RegistryURL           string
 	PrivateKeyPath        string
 	PublicKeyPath         string
@@ -245,6 +246,7 @@ func loadConfig() Config {
 	return Config{
 		Port:                  getEnv("PORT", "8443"),
 		DBPath:                getEnv("DB_PATH", "/data/auth-tokens.db"),
+		ApprovedVersionPath:   getEnv("APPROVED_VERSION_PATH", "/data/approved_version.txt"),
 		RegistryURL:           getEnv("REGISTRY_URL", "registry.matched.laysports.co.uk"),
 		PrivateKeyPath:        getEnv("PRIVATE_KEY_PATH", "/data/private.pem"),
 		PublicKeyPath:         getEnv("PUBLIC_KEY_PATH", "/data/public.pem"),
@@ -475,6 +477,18 @@ func getApprovedVersion() string {
 	approvedVersionMu.RLock()
 	defer approvedVersionMu.RUnlock()
 	return approvedVersion
+}
+
+// refreshApprovedVersion reads the trusted approval file for security-sensitive
+// decisions. The watcher keeps the cached value current for observability, but
+// an exchange must not rely on a stale value after the file is removed or
+// invalidated.
+func refreshApprovedVersion() string {
+	v := loadApprovedVersion()
+	approvedVersionMu.Lock()
+	approvedVersion = v
+	approvedVersionMu.Unlock()
+	return v
 }
 
 func hashToken(token string) (string, error) {
@@ -709,7 +723,7 @@ func authorizeHandler(c *gin.Context) {
 		return
 	}
 
-	approved := getApprovedVersion()
+	approved := refreshApprovedVersion()
 	if approved == "" {
 		logError(c, http.StatusServiceUnavailable, tokenPrefix, "approved release unavailable")
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "approved release unavailable"})
@@ -797,6 +811,15 @@ func tokenServiceHandler(c *gin.Context) {
 			logRequest(c, http.StatusUnauthorized, tokenPrefix, "invalid or revoked token")
 			c.Header("WWW-Authenticate", `Bearer realm="https://auth.matched.laysports.co.uk/token",service="registry.matched.laysports.co.uk"`)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+			return
+		}
+
+		// Installer pulls are authorized only while a valid release approval is
+		// present. Owner tokens intentionally remain available for the release
+		// workflow to publish and verify the next release before approval advances.
+		if refreshApprovedVersion() == "" {
+			logError(c, http.StatusServiceUnavailable, tokenPrefix, "approved release unavailable")
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "approved release unavailable"})
 			return
 		}
 
@@ -968,6 +991,7 @@ func setupRouter() *gin.Engine {
 
 func main() {
 	cfg = loadConfig()
+	approvedVersionPath = cfg.ApprovedVersionPath
 	rateLimiter = NewRateLimiter(cfg.RateLimitPerMin, time.Minute)
 
 	approvedVersion = loadApprovedVersion()

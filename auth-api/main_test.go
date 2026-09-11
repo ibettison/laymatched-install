@@ -50,12 +50,48 @@ func setupTestDB(t *testing.T) (*sql.DB, func()) {
 	);
 	CREATE INDEX idx_token_sha256 ON installer_tokens(token_sha256);
 	CREATE INDEX idx_customer_id ON installer_tokens(customer_id);
+
+	CREATE TABLE owner_tokens (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL,
+		token_sha256 TEXT NOT NULL UNIQUE,
+		token_hash TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		revoked_at DATETIME,
+		expires_at DATETIME,
+		scopes TEXT NOT NULL,
+		notes TEXT,
+		last_used_at DATETIME
+	);
+	CREATE INDEX idx_owner_token_sha256 ON owner_tokens(token_sha256);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatalf("Schema failed: %v", err)
 	}
 
 	return db, func() { db.Close() }
+}
+
+func insertTestOwnerToken(t *testing.T, db *sql.DB, name, token, scopes string, revoked, expired bool) {
+	bcryptHash := hashTokenForTest(t, token)
+	sha256Hash := tokenSHA256(token)
+	var revokedAt, expiresAt *time.Time
+	now := time.Now()
+	if revoked {
+		revokedAt = &now
+	}
+	if expired {
+		t := now.Add(-time.Hour)
+		expiresAt = &t
+	}
+
+	_, err := db.Exec(`
+		INSERT INTO owner_tokens (name, token_sha256, token_hash, revoked_at, expires_at, scopes, notes)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, name, sha256Hash, bcryptHash, revokedAt, expiresAt, scopes, "test owner token")
+	if err != nil {
+		t.Fatalf("Owner token insert failed: %v", err)
+	}
 }
 
 func generateTestKeys(t *testing.T) (*rsa.PrivateKey, *rsa.PublicKey) {
@@ -258,6 +294,135 @@ func TestTokenServiceWithInstallerToken(t *testing.T) {
 	}
 	if claims["customer_id"] != "customer-1" {
 		t.Errorf("Wrong customer_id: %v", claims["customer_id"])
+	}
+}
+
+func TestTokenServiceInstallerFailsClosedWithoutApprovedRelease(t *testing.T) {
+	cases := []struct {
+		name     string
+		hasFile  bool
+		contents string
+		status   int
+	}{
+		{name: "missing", status: http.StatusServiceUnavailable},
+		{name: "empty", hasFile: true, status: http.StatusServiceUnavailable},
+		{name: "invalid", hasFile: true, contents: "latest", status: http.StatusServiceUnavailable},
+		{name: "valid", hasFile: true, contents: "v0.3.0", status: http.StatusOK},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			testDB, cleanup := setupTestDB(t)
+			defer cleanup()
+			db = testDB
+			priv, pub := generateTestKeys(t)
+			privateKey = priv
+			publicKey = pub
+			cfg = Config{RegistryURL: "registry.matched.laysports.co.uk", RateLimitPerMin: 1000}
+
+			versionPath := filepath.Join(t.TempDir(), "approved_version.txt")
+			if tc.hasFile {
+				if err := os.WriteFile(versionPath, []byte(tc.contents), 0644); err != nil {
+					t.Fatalf("Approved version setup failed: %v", err)
+				}
+			}
+			approvedVersionPath = versionPath
+			approvedVersion = loadApprovedVersion()
+
+			installerToken := "lm_inst_tokenapproval1234567890"
+			insertTestToken(t, testDB, "customer-1", installerToken, false, false)
+			router := setupRouter()
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/token?service=registry.matched.laysports.co.uk&scope=repository:laymatched-api:pull", nil)
+			req.Header.Set("Authorization", "Bearer "+installerToken)
+			router.ServeHTTP(w, req)
+
+			if w.Code != tc.status {
+				t.Fatalf("Expected %d, got %d: %s", tc.status, w.Code, w.Body.String())
+			}
+			if tc.status != http.StatusOK {
+				var response TokenServiceResponse
+				if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+					t.Fatalf("Invalid JSON: %v", err)
+				}
+				if response.Token != "" || bytes.Contains(w.Body.Bytes(), []byte(installerToken)) {
+					t.Fatalf("Unavailable approval issued or echoed a credential: %s", w.Body.String())
+				}
+			}
+		})
+	}
+}
+
+func TestTokenServiceRejectsRevokedAndExpiredInstallerTokens(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		present bool
+		revoked bool
+		expired bool
+	}{{name: "unknown"}, {name: "revoked", present: true, revoked: true}, {name: "expired", present: true, expired: true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			testDB, cleanup := setupTestDB(t)
+			defer cleanup()
+			db = testDB
+			priv, pub := generateTestKeys(t)
+			privateKey = priv
+			publicKey = pub
+			cfg = Config{RegistryURL: "registry.matched.laysports.co.uk", RateLimitPerMin: 1000}
+			approvedVersion = loadApprovedVersion()
+
+			installerToken := "lm_inst_invalidapproval123456789"
+			if tc.present {
+				insertTestToken(t, testDB, "customer-1", installerToken, tc.revoked, tc.expired)
+			}
+			router := setupRouter()
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/token?service=registry.matched.laysports.co.uk&scope=repository:laymatched-api:pull", nil)
+			req.Header.Set("Authorization", "Bearer "+installerToken)
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusUnauthorized {
+				t.Fatalf("Expected 401, got %d: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestOwnerTokenExchangeRemainsAvailableWithoutApprovedRelease(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testDB, cleanup := setupTestDB(t)
+	defer cleanup()
+	db = testDB
+	priv, pub := generateTestKeys(t)
+	privateKey = priv
+	publicKey = pub
+	cfg = Config{RegistryURL: "registry.matched.laysports.co.uk", RateLimitPerMin: 1000}
+
+	approvedVersionPath = filepath.Join(t.TempDir(), "missing-approved-version.txt")
+	approvedVersion = loadApprovedVersion()
+	ownerToken := "lm_owner_releaseworkflow123456789"
+	insertTestOwnerToken(t, testDB, "release-workflow", ownerToken,
+		"repository:laymatched-api:push,repository:laymatched-api:pull", false, false)
+
+	router := setupRouter()
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/token?service=registry.matched.laysports.co.uk&scope=repository:laymatched-api:push", nil)
+	req.Header.Set("Authorization", "Bearer "+ownerToken)
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected owner release exchange to remain available, got %d: %s", w.Code, w.Body.String())
+	}
+	var response TokenServiceResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("Invalid JSON: %v", err)
+	}
+	if response.Token == "" {
+		t.Fatal("Expected owner registry JWT")
+	}
+	if _, err := jwt.Parse(response.Token, func(t *jwt.Token) (interface{}, error) { return pub, nil }); err != nil {
+		t.Fatalf("Owner registry JWT did not verify: %v", err)
 	}
 }
 
