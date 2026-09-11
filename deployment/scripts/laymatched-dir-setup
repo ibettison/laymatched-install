@@ -4,9 +4,27 @@
 
 set -euo pipefail
 
-# Production services do not run as root. The Auth API runs as UID/GID
-# 1000:1000 and needs write access to its SQLite database and signing keys;
-# registry data remains root-owned. laymatched-deploy has NO write access.
+# Production services do not run as root. Reserve a dedicated numeric
+# identity for the Auth API instead of assuming the first host user is UID
+# 1000. The script fails closed if the reserved identity is already assigned.
+# Registry data remains root-owned. laymatched-deploy has NO write access.
+AUTH_SERVICE_UID=2001
+AUTH_SERVICE_GID=2001
+
+if getent passwd "$AUTH_SERVICE_UID" >/dev/null 2>&1; then
+    echo "Refusing to use occupied Auth API UID $AUTH_SERVICE_UID" >&2
+    exit 1
+fi
+if getent group "$AUTH_SERVICE_GID" >/dev/null 2>&1; then
+    echo "Refusing to use occupied Auth API GID $AUTH_SERVICE_GID" >&2
+    exit 1
+fi
+if id -u laymatched-deploy >/dev/null 2>&1; then
+    if [ "$(id -u laymatched-deploy)" = "$AUTH_SERVICE_UID" ] || [ "$(id -g laymatched-deploy)" = "$AUTH_SERVICE_GID" ]; then
+        echo "Refusing to share Auth API identity with laymatched-deploy" >&2
+        exit 1
+    fi
+fi
 DIRS=(
     "/opt/laymatched-auth"
     "/opt/laymatched-auth/data"
@@ -17,8 +35,8 @@ DIRS=(
 for d in "${DIRS[@]}"; do
     mkdir -p "$d"
     if [ "$d" = "/opt/laymatched-auth/data" ]; then
-        chown -R 1000:1000 "$d"
-        owner="1000:1000"
+        chown -R "${AUTH_SERVICE_UID}:${AUTH_SERVICE_GID}" "$d"
+        owner="${AUTH_SERVICE_UID}:${AUTH_SERVICE_GID}"
     else
         chown root:root "$d"
         owner="root:root"
@@ -30,5 +48,5 @@ done
 # Parent directories world-readable but not writable by laymatched-deploy
 chmod 755 /opt/laymatched-auth /opt/laymatched-registry
 
-echo "Auth API data is writable only by UID/GID 1000:1000"
+echo "Auth API data is writable only by reserved UID/GID ${AUTH_SERVICE_UID}:${AUTH_SERVICE_GID}"
 echo "laymatched-deploy has NO direct write access to production paths"

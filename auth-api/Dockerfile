@@ -18,7 +18,7 @@ WORKDIR /app
 
 COPY --from=builder /app/auth-api .
 
-RUN mkdir -p /data && chown 1000:1000 /data && chmod 750 /data
+RUN mkdir -p /data && chown 2001:2001 /data && chmod 750 /data
 
 ENV PORT=8443 \
     DB_PATH=/data/auth-tokens.db \
@@ -32,6 +32,6 @@ ENV PORT=8443 \
 
 EXPOSE 8443
 
-USER 1000:1000
+USER 2001:2001
 
 ENTRYPOINT ["./auth-api"]

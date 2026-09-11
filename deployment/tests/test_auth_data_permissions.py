@@ -12,11 +12,16 @@ class AuthDataPermissionsTest(unittest.TestCase):
             REPOSITORY_ROOT / "deployment" / "scripts" / "laymatched-dir-setup"
         ).read_text()
 
-        self.assertIn("chown 1000:1000 /data", dockerfile)
-        self.assertIn("USER 1000:1000", dockerfile)
+        self.assertIn("chown 2001:2001 /data", dockerfile)
+        self.assertIn("USER 2001:2001", dockerfile)
+        self.assertIn("AUTH_SERVICE_UID=2001", setup_script)
+        self.assertIn("AUTH_SERVICE_GID=2001", setup_script)
         self.assertIn('if [ "$d" = "/opt/laymatched-auth/data" ]', setup_script)
-        self.assertIn('chown -R 1000:1000 "$d"', setup_script)
+        self.assertIn('chown -R "${AUTH_SERVICE_UID}:${AUTH_SERVICE_GID}" "$d"', setup_script)
         self.assertIn('chown root:root "$d"', setup_script)
+        self.assertIn('getent passwd "$AUTH_SERVICE_UID"', setup_script)
+        self.assertIn('getent group "$AUTH_SERVICE_GID"', setup_script)
+        self.assertIn('id -u laymatched-deploy', setup_script)
         self.assertNotRegex(dockerfile, r"USER\s+0(?::0)?")
 
 
