@@ -479,3 +479,86 @@ system was contacted or changed.
 
 NEXT TASK: controlled production installation-proof acceptance, after the
 required merge approval and under the separate production-change controls.
+
+## 12. Dated final verification — Gate 1 PR #24 (2026-09-11)
+
+This is a new programme-control update; previous PAD history is retained.
+
+### Gate 1 — Installation Proof
+
+PR #24: `#24`
+
+Branch: `fix/gate-1-auth-registry-production-bootstrap`
+
+Current HEAD: `1f8465c560369d4e0920f37485aa089fa4e871a5`
+
+Scope completed:
+
+- Installer `/token` issuance fails closed when `approved_version.txt` is
+  missing, empty, or invalid.
+- Approval metadata is separated from Auth API runtime state, root-controlled,
+  and mounted read-only to the non-root Auth API service.
+- Release candidates are built, pushed, and Owner-verified in owner-only
+  staging repositories before approval.
+- Only approved candidates are promoted into customer-visible API/Web
+  repositories. Installer credentials have no staging or push scope.
+- Exact application SHA labels are checked for both API and Web images at
+  build, staging verification, and post-promotion Installer pull steps.
+
+Previous P1 findings:
+
+- P1-1: resolved. Installer-token `/token` checks the current approved release
+  and issues no pull JWT when approval is unavailable. Valid approval preserves
+  the restricted API/Web pull scope; invalid, revoked, and expired Installer
+  Tokens remain denied. Owner release-management exchange remains available
+  under explicit Owner scopes.
+- P1-2: resolved. `approved_version.txt` is root-owned under the separate
+  `/opt/laymatched-auth/approval` path and read-only-mounted into Auth API.
+  SQLite/generated-key runtime state retains only required service write access;
+  reserved UID/GID collision checks remain active.
+
+Release-control finding:
+
+- Resolved. Docker Distribution repository scopes do not constrain tags, so
+  unapproved candidates are never placed in customer-visible repositories.
+  Owner staging publication and verification precede the privileged approval
+  update; Owner promotion follows approval. Installer scope remains pull-only
+  for the approved customer API/Web repositories.
+
+Validation evidence:
+
+- Auth API Go tests: PASS — `GOCACHE=/tmp/laymatched-install-go-cache go test
+  ./...`.
+- Focused approval/token/registry tests: PASS, including valid approved flow,
+  missing/empty/invalid approval fail-closed, invalid/revoked/expired token
+  rejection, staging/push scope denial, and no credential leakage.
+- Release workflow/deployment tests: PASS — 23 tests.
+- Installer/security tests: PASS — 12 tests.
+- Activation contract tests: PASS — 19 tests.
+- Nginx/deployment policy: PASS.
+- Shell syntax checks: PASS.
+- GitHub workflow YAML and embedded shell parsing: PASS.
+- Canonical and deployment workflow copies: identical.
+- `git diff --check`: PASS.
+- Docker-backed integration suite: NOT RUN / UNPROVEN. The command was
+  attempted, but every Testcontainers case stopped before setup because
+  `/var/run/docker.sock` returned permission denied. No registry or production
+  endpoint was contacted.
+
+Security review: customers cannot access staging repositories through the
+Installer scope; Installer Tokens cannot obtain push or administration scope;
+Owner staging publication and promotion remain scoped; Auth API cannot alter
+the trusted approval file; installer/registry credentials remain ephemeral and
+are cleaned up; and no secrets are exposed in logs or repository content.
+
+Status:
+
+- Gate 1: **IMPLEMENTED**
+- Gate 1: **TESTED** (all runnable repository checks pass)
+- Gate 1: **NOT YET DEPLOYED / NOT YET PROVEN LIVE**
+- Production installation-proof and direct production registry confirmation
+  remain **UNPROVEN** by design.
+
+Recommended NEXT TASK: **controlled production installation-proof acceptance**,
+under separate Owner-approved production-change controls. Do not begin it in
+this task; PR #24 has not been merged or deployed.
