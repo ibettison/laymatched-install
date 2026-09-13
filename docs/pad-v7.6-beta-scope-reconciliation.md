@@ -1119,3 +1119,74 @@ variant collapse, reviewed-catalogue filtering, concurrent bulk idempotency,
 and inactive-total exclusion, then request another independent exact-HEAD
 review. Do not merge or deploy PR #245 before that GREEN review and explicit
 Owner approval.
+
+## 21. Dated A-07 blocker remediation — PR #245 (2026-09-13)
+
+This record appends the remediation evidence for the four RED exact-SHA review
+blockers. PR #245 remains unmerged and undeployed.
+
+### Remediation identity
+
+- Repository: `ibettison/layMatchedBetting`.
+- PR: `#245` —
+  https://github.com/ibettison/layMatchedBetting/pull/245
+- Branch: `a-07-fast-account-onboarding`.
+- Exact implementation HEAD: `cb83d282f63e154f0a275bbf481d034add7f34f9`.
+- Commit: `Fix A-07 provider setup safety`.
+- Files changed: `backend/app/api/mvp.py` and
+  `backend/tests/test_mvp_flow.py` only.
+
+### Blockers fixed
+
+1. Account setup now collapses reviewed directory variants through the
+   canonical operator mapping, preserving bookmaker/exchange type separation.
+2. Customer setup now admits only canonical seeds and directory identities with
+   explicit `approved` or `current` review status. Unreviewed URLs are not
+   exposed as customer “Official site” links; manual provider entry remains the
+   escape hatch.
+3. Bulk creation now uses database-native conflict-safe insertion for SQLite and
+   PostgreSQL, with savepoint-based conflict recovery for other dialects. A
+   losing request safely skips the existing operator, so opening ledger entries
+   and creation events are emitted only by the winner.
+4. Live bankroll cash, pending transfers, bookmaker/exchange cash, committed
+   stakes, unsettled returns, and exchange liability now use active operators;
+   inactive account records and their history remain available separately.
+
+### Validation evidence
+
+- Focused A-07/backend account-management tests: **10 passed**, including
+  canonical/needs-review catalogue filtering, archive totals, and dependency-
+  free hard deletion.
+- Full `backend/tests/test_mvp_flow.py`: **36 passed**.
+- Canonical registry tests: **6 passed**.
+- True overlapping bulk duplicate regression: **passed**; exactly one
+  operator, opening-balance ledger entry, and creation event were verified.
+- Central frontend tests: **129 passed**.
+- Customer-profile tests: **1 passed**.
+- Central production build: **passed**.
+- Customer production build: **passed**.
+- Lint: **0 errors, 4 pre-existing warnings**.
+- Python compileall: **passed**.
+- `git diff --check`: **passed**.
+- Credential/scope review of changed files: no credentials, secrets, private
+  keys, provider integrations, DNS, Stripe, ACME, AWS, or customer-data-boundary
+  expansion introduced.
+- Full backend suite: **inconclusive**; it again emitted passing dots to about
+  70% and then stalled until the explicit 120-second timeout, with no failure
+  output.
+
+### Current A-07 status split
+
+- **IMPLEMENTED:** YES — the four RED acceptance blockers are remediated at
+  the exact HEAD above.
+- **TESTED:** YES — focused and required frontend/backend/build/static checks
+  passed; full backend remains inconclusive as recorded.
+- **DEPLOYED:** NO.
+- **ACCEPTED-PROVEN LIVE:** NO.
+
+Nothing in this record claims merge, deployment, customer-VPS acceptance, or
+live proof. No unrelated files were changed in the implementation worktree.
+
+NEXT TASK: obtain a fresh independent exact-SHA review of PR #245 at
+`cb83d282f63e154f0a275bbf481d034add7f34f9`; do not merge or deploy until that
+review is GREEN and the Owner gives explicit approval.
