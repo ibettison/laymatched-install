@@ -1325,3 +1325,53 @@ as an ordinary operational update.
 NEXT TASK: obtain a fresh independent exact-SHA review of PR #245 at
 `059c31e82d65ef1997d84c336f674ab8904bcf47`; do not merge or deploy until that
 review is GREEN and the Owner gives explicit approval.
+
+## 24. Exact-HEAD validation record — PR #245 (2026-09-13)
+
+This record appends execution evidence for the exact implementation HEAD. PR
+#245 remains **UNMERGED** and **UNDEPLOYED**.
+
+### Validation identity
+
+- Repository: `ibettisson/layMatchedBetting`.
+- PR: `#245` —
+  https://github.com/ibettisson/layMatchedBetting/pull/245
+- Branch: `a-07-fast-account-onboarding`.
+- Exact validated HEAD: `059c31e82d65ef1997d84c336f674ab8904bcf47`.
+- Worktree remained clean; no code changes were required during validation.
+
+### Exact-HEAD execution evidence
+
+- `pytest -q -rA backend/tests/test_mvp_flow.py -k 'a07 or bankroll_accounts_movements_and_funding_warnings'`: **18 passed**.
+  This includes the overlapping bulk duplicate regression, archived cash
+  exclusion, paused/restricted/disabled/source-broken/closed totals,
+  unsettled-bet and pending-transfer removal protection, dependency-free
+  hard-delete, rename/history preservation, and duplicate correction checks.
+- `pytest -q -rA backend/tests/test_mvp_flow.py`: **45 passed**.
+- `pytest -q -rA backend/tests/test_canonical_registry.py`: **6 passed**.
+- `npx vitest run src/AccountSetupPanel.test.tsx src/Workspace.test.tsx`:
+  **29 passed** in 2 files.
+- `npm test`: central **129 passed** in 17 files; customer-profile **1
+  passed** in 1 file.
+- `npm run build`: **passed**.
+- `npm run build:customer`: **passed**.
+- `npm run lint`: **0 errors, 4 pre-existing warnings**.
+- `python -m compileall -q backend/app backend/tests`: **passed**.
+- `git diff --check`: **passed**.
+
+The full backend command `pytest -vv` collected 456 tests and is
+**INCONCLUSIVE**, not failed: it reached 71% and stalled after the last
+reported pass at `tests/test_offer_discovery.py::test_automatic_bootstrap_on_fresh_install`.
+It timed out with exit 124 after 120 seconds and produced no failure output.
+
+### Current A-07 status split
+
+- **IMPLEMENTED:** YES.
+- **TESTED:** YES — all required focused exact-HEAD checks passed; the full
+  backend suite is separately recorded as inconclusive.
+- **DEPLOYED:** NO.
+- **ACCEPTED-PROVEN LIVE:** NO.
+
+NEXT TASK: obtain a fresh independent exact-SHA review of PR #245 at
+`059c31e82d65ef1997d84c336f674ab8904bcf47`; do not merge or deploy until that
+review is GREEN and the Owner gives explicit approval.
