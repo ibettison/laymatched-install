@@ -1190,3 +1190,72 @@ live proof. No unrelated files were changed in the implementation worktree.
 NEXT TASK: obtain a fresh independent exact-SHA review of PR #245 at
 `cb83d282f63e154f0a275bbf481d034add7f34f9`; do not merge or deploy until that
 review is GREEN and the Owner gives explicit approval.
+
+## 22. Dated canonical variant remediation — PR #245 (2026-09-13)
+
+This record corrects the previous remediation status after the independent
+review found that the parallel variant map did not cover every variant declared
+by the reviewed canonical registry. PR #245 remains unmerged and undeployed.
+
+### Remediation identity
+
+- Repository: `ibettison/layMatchedBetting`.
+- PR: `#245` —
+  https://github.com/ibettison/layMatchedBetting/pull/245
+- Branch: `a-07-fast-account-onboarding`.
+- Previous reviewed HEAD: `cb83d282f63e154f0a275bbf481d034add7f34f9`.
+- New exact implementation HEAD: `e09a297d06584d24a77f214efa3791d984f7e572`.
+- Commit: `Fix canonical A-07 provider variants`.
+- Implementation files changed in this increment: `backend/app/api/mvp.py`,
+  `backend/app/domain/offers/canonical_registry.py`, and
+  `backend/tests/test_mvp_flow.py` only.
+
+### Previous gap and exact fix
+
+The previous HEAD used `VARIANT_PARENTS` for account setup, but that parallel
+map omitted declared registry variants including `paddy-power-acca`,
+`paddy-power-daily-rewards`, and `william-hill-extra-places`. Approved/current
+directory rows for those variants could therefore appear as separate setup
+providers.
+
+The canonical registry now derives and validates a complete
+`CANONICAL_VARIANT_PARENTS` map directly from every `CANONICAL_OPERATORS` seed.
+Account setup uses that map to collapse every declared variant to its one
+canonical identity while preserving bookmaker/exchange separation. Bulk
+requests also canonicalize declared variant slugs defensively, preventing a
+stale or manually crafted variant payload from creating a second provider.
+
+### Corrected validation evidence
+
+- Focused A-07/backend tests: **12 passed**.
+- Full `backend/tests/test_mvp_flow.py`: **39 passed**.
+- Canonical registry tests: **6 passed**.
+- All declared canonical registry variants regression: **passed**.
+- Variant bulk-payload duplicate-prevention regression: **passed**.
+- Central frontend tests: **129 passed**.
+- Customer-profile tests: **1 passed**.
+- Focused A-07 UI tests: **29 passed**.
+- Central/customer builds: **passed**.
+- Lint: **0 errors, 4 pre-existing warnings**.
+- Python compileall: **passed**.
+- `git diff --check`: **passed**.
+- Full backend suite: **inconclusive**; it again stalled around 70% after
+  passing output and timed out without failure output.
+- Credential/scope review: no credentials, secrets, private keys, provider
+  integrations, DNS, Stripe, ACME, AWS, or customer-data-boundary expansion.
+
+### Corrected A-07 status split
+
+- **IMPLEMENTED:** YES — the previously identified canonical variant gap is
+  fixed at the new exact HEAD.
+- **TESTED:** YES — all focused and requested validation passed; the full
+  backend suite remains inconclusive as recorded.
+- **DEPLOYED:** NO.
+- **ACCEPTED-PROVEN LIVE:** NO.
+
+The prior section 21 status claim is superseded by this correction; its history
+is preserved. The PR is still awaiting independent review and Owner approval.
+
+NEXT TASK: obtain a fresh independent exact-SHA review of PR #245 at
+`e09a297d06584d24a77f214efa3791d984f7e572`; do not merge or deploy until that
+review is GREEN and the Owner gives explicit approval.
