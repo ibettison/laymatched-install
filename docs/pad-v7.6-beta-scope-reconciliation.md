@@ -1259,3 +1259,69 @@ is preserved. The PR is still awaiting independent review and Owner approval.
 NEXT TASK: obtain a fresh independent exact-SHA review of PR #245 at
 `e09a297d06584d24a77f214efa3791d984f7e572`; do not merge or deploy until that
 review is GREEN and the Owner gives explicit approval.
+
+## 23. Dated financial-state remediation — PR #245 (2026-09-13)
+
+This record appends the final financial-state remediation for A-07. PR #245
+remains unmerged and undeployed.
+
+### Remediation identity
+
+- Repository: `ibettison/layMatchedBetting`.
+- PR: `#245` —
+  https://github.com/ibettison/layMatchedBetting/pull/245
+- Branch: `a-07-fast-account-onboarding`.
+- Previous reviewed HEAD: `e09a297d06584d24a77f214efa3791d984f7e572`.
+- New exact implementation HEAD: `059c31e82d65ef1997d84c336f674ab8904bcf47`.
+- Commit: `Separate archived accounts from operational inactivity`.
+- Files changed in this increment: `backend/app/api/mvp.py`,
+  `backend/tests/test_mvp_flow.py`, `frontend/src/Workspace.tsx`, and
+  `frontend/src/api.ts` only.
+
+### Previous financial-state gap and exact fix
+
+The previous implementation treated `active=false` as removal for financial
+purposes, although ordinary operational statuses such as restricted, paused,
+disabled, source-broken, and closed also set that flag. Legitimate account cash
+and exposure could therefore disappear from current totals.
+
+The removal path now uses the explicit `archived` account status. Financial
+cash totals include every non-archived operator regardless of operational
+status. Removal is refused while unresolved bets or pending transfers exist, so
+live financial activity cannot be hidden by archiving. Legacy archived records
+with already placed bets or pending transfers retain that exposure in current
+totals until resolution, while archived cash remains excluded. The customer
+account view displays the archived status without allowing it to be submitted
+as an ordinary operational update.
+
+### Validation evidence
+
+- Focused A-07 financial/account tests: **18 passed**.
+- Full `backend/tests/test_mvp_flow.py`: **45 passed**.
+- Canonical registry tests: **6 passed**.
+- Central frontend tests: **129 passed**.
+- Customer-profile tests: **1 passed**.
+- Focused A-07 UI tests: **29 passed**.
+- Central/customer builds: **passed**.
+- Lint: **0 errors, 4 pre-existing warnings**.
+- Python compileall: **passed**.
+- `git diff --check`: **passed**.
+- Credential/scope review: no credentials, secrets, private keys, provider
+  integrations, DNS, Stripe, ACME, AWS, or customer-data-boundary expansion.
+- Full backend suite: not rerun for this focused financial-state increment;
+  the immediately preceding exact-HEAD run at `e09a297d` remains
+  **INCONCLUSIVE**, stalling around 70% after passing output and timing out
+  without failure output.
+
+### Current A-07 status split
+
+- **IMPLEMENTED:** YES — operational inactivity is distinct from explicit
+  customer removal/archive, and unresolved financial activity is protected.
+- **TESTED:** YES — focused backend, frontend, customer, build, lint, compile,
+  and diff checks passed; full backend status remains as recorded above.
+- **DEPLOYED:** NO.
+- **ACCEPTED-PROVEN LIVE:** NO.
+
+NEXT TASK: obtain a fresh independent exact-SHA review of PR #245 at
+`059c31e82d65ef1997d84c336f674ab8904bcf47`; do not merge or deploy until that
+review is GREEN and the Owner gives explicit approval.
