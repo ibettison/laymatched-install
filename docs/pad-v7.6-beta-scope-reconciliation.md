@@ -1050,3 +1050,72 @@ exercised through the customer UI.
 NEXT TASK: obtain independent Owner review and approval of PR #245 including
 this account-management extension. If approved, use a separate explicit
 merge/deployment gate; do not merge or deploy as part of this PAD update.
+
+## 20. Dated independent exact-SHA review — A-07 PR #245 (2026-09-13)
+
+This record preserves the prior A-07 implementation history and records the
+fresh base-to-HEAD review. No code was modified, and PR #245 was not merged or
+deployed.
+
+### Review identity
+
+- Repository: `ibettison/layMatchedBetting`.
+- PR: `#245` —
+  https://github.com/ibettison/layMatchedBetting/pull/245
+- Base reviewed: `origin/main` at
+  `ba127526eb266b2137f316c4a402d700363e3fff`.
+- Exact reviewed HEAD: `63751c993131864f4085ec4fa59f3834e5cd4170`.
+- Review result: **RED — do not merge**.
+- PR review comment:
+  https://github.com/ibettison/layMatchedBetting/pull/245#issuecomment-5652784350
+
+### Unresolved acceptance blockers
+
+The review found four P1 blockers:
+
+1. `account_setup_catalogue` still exposes directory variants separately
+   instead of collapsing `canonical_operator_slug`/registry variants to one
+   canonical selectable provider.
+2. The catalogue loop does not exclude `needs_review` directory identities or
+   unreviewed homepage URLs, while the UI labels any non-null URL as “Official
+   site”.
+3. Bulk creation remains a check-then-insert operation without concurrent
+   unique-conflict handling, so simultaneous duplicate requests can fail with
+   an unhandled integrity error.
+4. Bankroll active totals still sum inactive/archived operators even though
+   the account list is split into active and inactive sections.
+
+The account-management additions themselves passed review for rename identity
+preservation, balance/history retention, deliberate named confirmation,
+dependency-aware archive, inactive history access, and customer-controlled
+duplicate correction. The dependency-free hard-delete branch exists but has
+no focused regression exercising a truly unreferenced operator.
+
+### Revalidated evidence
+
+- Backend focused `test_mvp_flow.py`: **34 passed**.
+- Full frontend: **129 central-profile tests passed** and **1
+  customer-profile test passed**.
+- Focused A-07 tests: **29 passed**.
+- Central/customer builds: **passed**.
+- Lint: **0 errors, 4 pre-existing warnings**.
+- Python compileall and `git diff --check`: **passed**.
+- Full backend remains separately recorded as inconclusive after the prior 65%
+  stall without failure output.
+- Isolated catalogue probe reproduced both a canonical variant and an
+  unreviewed directory row in the selectable catalogue.
+
+### Current A-07 status split
+
+- **IMPLEMENTED:** YES, but the full A-07 acceptance bar is blocked by the
+  four unresolved provider/concurrency/total-integrity findings above.
+- **TESTED:** YES for the reported implementation and regression suites;
+  required blocker cases are not yet covered or safe.
+- **DEPLOYED:** NO.
+- **ACCEPTED-PROVEN LIVE:** NO.
+
+NEXT TASK: fix the four review blockers, add focused regressions for canonical
+variant collapse, reviewed-catalogue filtering, concurrent bulk idempotency,
+and inactive-total exclusion, then request another independent exact-HEAD
+review. Do not merge or deploy PR #245 before that GREEN review and explicit
+Owner approval.
