@@ -609,3 +609,444 @@ Gate 1 status:
 Recommended NEXT TASK: **controlled production installation-proof acceptance**.
 Before execution, the Owner must explicitly establish the intended production
 Auth/Registry deployment target and approved application release version.
+
+## 14. Dated programme update — Gate 2A PR #244 preflight portability correction (2026-09-12)
+
+This is a new programme-control update; previous PAD history is retained.
+
+### Gate 2A — Safe local onboarding projection
+
+- PR: `#244`
+- Repository: `ibettison/layMatchedBetting`
+- Branch: `gate-2a-requalification`
+- Current PR HEAD: `e96119dfbb4a82db713b5c297b41b45ac2a63ba6`
+- Base: `main`
+- Commit: `Fix Gate 2A preflight checkout portability`
+
+Scope of this correction:
+
+- Removed the preflight guard's dependency on the historical
+  `/tmp/laymatched-gate2a-requalification` checkout path.
+- The guard continues to derive the active repository root using
+  `git rev-parse --show-toplevel` and reports that root in its pass output.
+- Existing remote, branch, expected-base, clean-worktree, changed-file
+  allowlist, and credential-like diff protections remain in force.
+- Added a focused portability test using an isolated checkout whose path
+  contains spaces.
+
+Validation evidence:
+
+- `bash -n scripts/gate2a-preflight.sh scripts/test_gate2a-preflight.sh`: PASS.
+- ShellCheck: PASS.
+- Focused preflight portability test: PASS. The guard passed from an isolated
+  checkout at a space-containing path.
+- `git diff --check`: PASS.
+- Prior exact-HEAD application validation remains applicable because this
+  correction changes only the preflight guard and its focused test: frontend
+  124/124 tests passed; backend onboarding tests passed; frontend build passed;
+  and lint reported zero errors with four pre-existing warnings. The full
+  backend regression suite remained inconclusive after exceeding ten minutes
+  without a completion result.
+- No GitHub workflow checks or commit statuses are reported for this branch.
+
+Independent review status:
+
+- Fresh exact-SHA review of `e96119dfbb4a82db713b5c297b41b45ac2a63ba6`:
+  **CHANGES REQUESTED / AMBER**.
+- Review reference:
+  https://github.com/ibettison/layMatchedBetting/pull/244#issuecomment-5647330349
+- The portability correction was assessed as correct. The remaining finding
+  is that the customer-only activation panel is also shipped in the central
+  frontend, where `/api/activation/onboarding` is not mounted. It therefore
+  retries 404 responses indefinitely in the central workspace, creating
+  avoidable API traffic/log noise and exceeding the customer-only scope.
+
+Security and release status:
+
+- The portability correction does not add application integrations, credentials,
+  private material, migrations, deployment changes, or production access.
+- The preflight safety checks remain active.
+- PR #244 is **NOT MERGE-READY** pending the central-profile scope correction,
+  a central-profile test proving no activation request is made, and fresh
+  exact-SHA validation/review.
+- No merge, deployment, or Gate 2A live acceptance has occurred.
+
+NEXT TASK: correct the customer-only activation panel scope in PR #244, add the
+central-profile no-request test, rerun exact-HEAD validation and independent
+review, then append the resulting evidence here before requesting merge approval.
+
+## 15. Dated programme update — Gate 2A PR #244 customer artifact activation gate (2026-09-12)
+
+This update supersedes the open Gate 2A action in section 14 while retaining
+the prior history.
+
+### Scope completed
+
+- PR: `#244`
+- Repository: `ibettison/layMatchedBetting`
+- Branch: `gate-2a-requalification`
+- Final PR HEAD: `891d2ed377204b70794aadc8cf012e449bdd8b89`
+- Base: `main` at `928b131b7ae04246fc7dce7636516d39a358a59f`
+- The activation panel is compile-time gated to the customer artifact/profile;
+  the central artifact does not mount it.
+- The central frontend regression test proves `/api/activation/onboarding` is
+  not requested. The customer-profile integration test proves the customer
+  `App` mounts the panel and requests the endpoint.
+- Customer and central Vitest discovery are explicit and non-overlapping, and
+  the standard frontend `npm test` command runs both profiles.
+- The preflight guard continues to derive the actual checkout root and keeps
+  its remote, branch, base, clean-worktree, changed-file allowlist, and
+  credential-like diff protections. Its isolated checkout regression uses a
+  path containing spaces.
+
+Validation evidence pinned to final HEAD:
+
+- Standard frontend `npm test`: central profile 125/125 across 16 files, then
+  customer profile 1/1.
+- `npm run lint`: 0 errors and 4 pre-existing warnings.
+- `npm run build` and `npm run build:customer`: PASS.
+- Central bundle contains 0 `/api/activation/onboarding` references; customer
+  bundle contains 1 expected reference.
+- Backend activation/onboarding and activation-state tests: 15 passed.
+- `bash -n`, ShellCheck, direct Gate 2A preflight, isolated non-standard
+  checkout preflight test, and `git diff --check`: PASS.
+- PR diff summary from base to final HEAD: 15 allowlisted files changed,
+  574 insertions and 1 deletion. No unrelated repository paths were included.
+- No GitHub workflow runs or commit-status checks are available for this PR.
+- The full backend regression suite remains inconclusive from the previously
+  recorded run; it was not rerun because this correction is frontend test
+  profile/build wiring and the focused backend activation tests pass.
+
+Independent review status:
+
+- Fresh automated exact-SHA review of final HEAD `891d2ed377204b70794aadc8cf012e449bdd8b89`:
+  **CHANGES REQUESTED / AMBER**.
+- Review reference:
+  https://github.com/ibettison/layMatchedBetting/pull/244#issuecomment-5647536677
+- The review confirmed that profile-specific discovery is non-overlapping and
+  that the standard command runs both profiles. It initially requested exact
+  final-HEAD validation evidence; that evidence was subsequently rerun on the
+  clean final HEAD and attached to PR #244:
+  https://github.com/ibettison/layMatchedBetting/pull/244#issuecomment-5647545786
+- A replacement post-evidence verdict was requested, but no newer automated
+  review result was emitted at the time of this update.
+
+Security and release status:
+
+- The change remains read-only for activation state, exposes no credentials,
+  TOTP, private keys, or provider integration, and makes no deployment/AWS
+  changes.
+- Central artifact activation traffic is explicitly absent; customer artifact
+  activation remains limited to the safe onboarding projection.
+- PR #244 is **NOT MERGE-READY** pending a clean replacement independent
+  review verdict and Owner merge approval.
+- No merge, deployment, or Gate 2A live acceptance has occurred.
+
+NEXT TASK: obtain a clean independent review verdict for final HEAD
+`891d2ed377204b70794aadc8cf012e449bdd8b89`, then request separate Owner
+approval for merge. Do not merge or deploy as part of this update.
+
+## 16. Dated programme update — Gate 2A PR #244 merge-review handoff (2026-09-13)
+
+This update records the latest merge-review request; sections 14 and 15 remain
+the historical implementation and validation record.
+
+- PR: `#244`
+- Repository: `ibettison/layMatchedBetting`
+- Branch: `gate-2a-requalification`
+- Reviewed HEAD: `891d2ed377204b70794aadc8cf012e449bdd8b89`
+- PR state at review: **OPEN**, GitHub-reported `mergeable: true`, not merged.
+- `main` remains at `928b131b7ae04246fc7dce7636516d39a358a59f`.
+- No GitHub workflow or deployment records are available; no deployment has
+  been performed or evidenced.
+
+Latest review written to PR #244:
+
+- Final exact-HEAD validation review posted at:
+  https://github.com/ibettison/layMatchedBetting/pull/244#issuecomment-5651274087
+- The review records central/customer artifact separation, non-overlapping
+  profile test discovery, standard two-profile test execution, activation
+  polling coverage, preflight safety, exact validation results, and no new
+  substantive findings in the requested scope.
+- A GitHub `--approve` review was attempted to enable merge, but GitHub rejected
+  it because the authenticated account owns the pull request and cannot
+  approve its own PR. No approval status was changed by that attempt.
+
+Merge and release status:
+
+- PR #244 remains **NOT MERGED / NOT DEPLOYED**.
+- The technical validation review is complete, but merge still requires an
+  approval from an independent collaborator/Owner account.
+- No merge, deployment, or Gate 2A live acceptance has occurred.
+
+NEXT TASK: obtain independent collaborator/Owner approval for PR #244, then
+perform merge only under the separate approved merge procedure. Do not deploy
+or perform live acceptance until separately authorized.
+
+## 17. Dated programme completion record — Gate 2A PR #244 merged and central deployment (2026-09-13)
+
+This completion record is appended to the PAD history. Sections 14–16 remain
+the historical implementation, review, and approval trail.
+
+### Merge and deployment
+
+- PR: `#244`
+- Repository: `ibettison/layMatchedBetting`
+- Reviewed PR HEAD: `891d2ed377204b70794aadc8cf012e449bdd8b89`
+- Merge commit SHA: `ba127526eb266b2137f316c4a402d700363e3fff`
+- Resulting remote `main` SHA: `ba127526eb266b2137f316c4a402d700363e3fff`
+- PR state: **MERGED** at `2026-09-13T05:06:09Z`.
+- Deployment target: `/opt/laymatched-betting` using the normal
+  `/opt/laymatched-betting/update.sh` process.
+- Deployment result: **SUCCESS**; the stack advanced from
+  `928b131b7ae04246fc7dce7636516d39a358a59f` to
+  `ba127526eb266b2137f316c4a402d700363e3fff`.
+- The deployment process retained its rollback snapshot and reported
+  migration compatibility as `unknown`; no migration version change occurred.
+
+### Post-deployment evidence
+
+- Update-script health gates passed on attempt 2/24.
+- Independent checks: `/health` 200; `/app/` 200; unauthenticated
+  `/api/bankroll` 401; `/api/owner/auth/session` 200.
+- `docker compose ps`: API, web, and database containers all running and
+  healthy; web served on `127.0.0.1:8083`.
+- Deployed central web assets contain **0** references to
+  `/api/activation/onboarding`.
+- The running central API route table reports
+  `central_route_present=false` and no `/api/activation/*` routes.
+- The merged customer web image was built with the supported Docker
+  `customer` target; its asset contains the expected
+  `/api/activation/onboarding` reference. The customer artifact boundary test
+  passed, including exclusion of central/Owner/Stripe/private-key material.
+- The merged scope is the 15 previously allowlisted Gate 2A files only;
+  `git diff --check` passed. No credential-like material was detected, and
+  there was no change to credential, TOTP, private-key, provider, DNS, Stripe,
+  ACME, AWS, environment, Compose, or deployment configuration scope.
+- GitHub reports no available workflow/status checks for the merged PR
+  (`statusCheckRollup: []`).
+
+### Gate 2A status
+
+- **IMPLEMENTED:** YES — customer-only activation panel and safe onboarding
+  projection are present; central profile does not mount the panel.
+- **TESTED:** YES — exact reviewed HEAD validation passed before merge, and
+  post-merge central/customer artifact and production smoke checks passed.
+- **DEPLOYED:** YES — the approved merge is running in the central production
+  stack at the resulting `main` SHA.
+- **ACCEPTED-PROVEN LIVE:** **NOT YET PROVEN** — the customer artifact has
+  been built and boundary-checked, but no separate customer production
+  installation/live acceptance has been evidenced. The full backend suite is
+  also still inconclusive from the previously recorded run.
+
+NEXT TASK: perform the separately approved controlled customer-artifact
+deployment and live Gate 2A acceptance, proving the onboarding request and
+activation flow in the intended customer installation while preserving the
+central no-request invariant.
+
+## 18. Dated programme update — A-07 fast account onboarding and bookmaker management (2026-09-13)
+
+This A-07 record is appended to the PAD history. Gate 2A customer-VPS/live
+acceptance remains deferred and PR #244 was not reopened or changed.
+
+### Workstream and review target
+
+- Workstream: **A-07 — Fast Account Onboarding & Bookmaker Management**.
+- Repository: `ibettison/layMatchedBetting`.
+- Starting branch/SHA: `main` at
+  `ba127526eb266b2137f316c4a402d700363e3fff`.
+- New branch: `a-07-fast-account-onboarding`.
+- Commit/HEAD: `c3c8bcec6f35a1137d4462f890f626a088093234`
+  (`feat: speed up bookmaker account setup`).
+- New PR: `#245` —
+  https://github.com/ibettison/layMatchedBetting/pull/245
+- No merge or deployment has occurred.
+
+### Audit findings
+
+Before A-07, My Money supported one-at-a-time account creation, bookmaker or
+exchange classification, optional starting balance, HTTPS homepage validation,
+account editing, manual money movements, balance timestamps, ledger history,
+and the existing normal offer/bet workflow. The existing reviewed canonical
+operator registry and bookmaker-directory metadata supplied provider names and
+official homepages, but the customer profile had no searchable setup catalogue,
+bulk account operation, optional per-provider balance grid, or idempotent
+multi-selection handling. Existing individually-created accounts had to remain
+unchanged.
+
+### Implemented scope
+
+- Added a customer-facing `/api/account-catalogue` projection that reuses the
+  reviewed canonical provider identities and adds a small reviewed exchange set.
+- Added idempotent `POST /api/operators/bulk`, capped at 50 accounts, with
+  strict payload validation, optional non-negative opening balances, duplicate
+  selection de-duplication, and safe already-existing-account skips.
+- Added the responsive My Money setup panel: search, bookmaker/exchange badges,
+  select-all-visible, multi-select, optional balance inputs, and one submit for
+  the selected accounts.
+- Preserved the existing single-account form as the visible fresh-install and
+  manual “Add another bookmaker or exchange” escape hatch; unknown providers
+  remain immediately usable through the existing `/api/operators` flow.
+- Preserved account balance timestamps and the existing ledger so future A-09a
+  freshness work can extend the data without an A-07 schema change.
+
+### Files changed
+
+Only these eight A-07 files were committed:
+
+- `backend/app/api/mvp.py`
+- `backend/tests/test_mvp_flow.py`
+- `frontend/src/AccountSetupPanel.tsx`
+- `frontend/src/AccountSetupPanel.test.tsx`
+- `frontend/src/Workspace.tsx`
+- `frontend/src/Workspace.test.tsx`
+- `frontend/src/api.ts`
+- `frontend/src/styles.css`
+
+### Validation and acceptance evidence
+
+- Focused A-07 frontend tests: **2 passed**; the representative flow selects
+  multiple bookmaker/exchange providers, enters one optional balance, and sends
+  one bulk request. The manual unknown-provider escape hatch is also covered.
+- Existing Workspace regression tests: **25 passed**.
+- Full frontend validation: **127 central-profile tests passed** and **1
+  customer-profile test passed**.
+- Backend focused validation covering A-07, customer-artifact boundary, and
+  activation regression tests: **passed**; `test_mvp_flow.py` passed.
+- Bulk API evidence covers approximately 20-account-scale selection semantics
+  through a single capped batch, optional zero balances, existing-account
+  skips, repeated submission with zero new creations, and rejection of negative
+  opening balances without partial creation.
+- Central and customer production builds: **passed**.
+- Lint: **0 errors, 4 pre-existing warnings**.
+- Shell syntax, ShellCheck, Python compileall, and `git diff --check`: **passed**.
+- Full backend suite reached 65% and then stalled without failure output; it was
+  stopped and recorded as **inconclusive**. Focused backend coverage passed.
+- No screenshots were captured; the UI acceptance evidence is the focused
+  Testing Library interaction trace plus the full central/customer build.
+
+### Security and scope review
+
+- No bookmaker passwords or login credentials are accepted or stored.
+- No central exposure of customer private-VPS data was added.
+- No migrations, Stripe, DNS/HTTPS, MFA, provider API, scraping, email
+  ingestion, automatic discovery, reconciliation, betting automation, Owner
+  Portal, or backup/restore scope was added.
+- Changed-file review found no credential-like tokens, private keys, TOTP
+  material, or unrelated integration/configuration changes.
+- The original dirty landing-page worktree was not modified; the A-07 branch
+  was developed in a clean isolated worktree from the specified main SHA.
+
+### A-07 status split
+
+- **IMPLEMENTED:** YES.
+- **TESTED:** YES, subject to the full backend suite remaining inconclusive.
+- **DEPLOYED:** NO — explicitly not authorized in this work review.
+- **ACCEPTED-PROVEN LIVE:** NO — no live customer acceptance was performed.
+
+NEXT TASK: obtain independent Owner review and approval for PR #245, then
+follow a separate explicit merge/deployment approval gate. Do not merge or
+deploy PR #245 as part of this PAD update.
+
+## 19. Dated programme update — A-07 account personalisation and safe removal (2026-09-13)
+
+This record is appended to the PAD history. It extends PR #245 only; PR #244
+remains complete and was not reopened. No merge or deployment has occurred.
+
+### Workstream and review target
+
+- Workstream: **A-07 — Fast Account Onboarding & Bookmaker Management**.
+- Repository: `ibettison/layMatchedBetting`.
+- Branch: `a-07-fast-account-onboarding`.
+- PR: `#245` —
+  https://github.com/ibettison/layMatchedBetting/pull/245
+- Exact reviewed HEAD: `63751c993131864f4085ec4fa59f3834e5cd4170`.
+- Commit: `fix: make A-07 account removal and rename safe`.
+
+### Additional requirements addressed
+
+The existing implementation already retained canonical provider `slug`,
+bookmaker/exchange classification, balances, ledger movements, bets, offers,
+and account history on the `Operator` record. The remaining A-07 gaps were
+customer display-name personalisation, a deliberate self-service correction
+route for accidental/duplicate accounts, and safe handling of removal when
+financial or operational history exists.
+
+- Added editable account display name in My Money. The update path changes
+  only `Operator.name`; canonical `slug`, provider relationships,
+  bookmaker/exchange classification, balances, and history remain unchanged.
+- Added a named-confirmation `DELETE /api/operators/{operator_id}` action.
+  The confirmation identifies the display name and canonical provider slug.
+- Dependency-aware removal hard-deletes only a row with no linked history,
+  configuration, or account audit events. Otherwise it sets the existing safe
+  inactive/disabled state, records an archive event, and returns the dependency
+  summary with history-preserved status.
+- Normal `/api/operators` and active My Money accounts now omit inactive rows;
+  bankroll calculations retain their financial values and a clearly labelled
+  removed/inactive section keeps historical account detail accessible.
+- Existing inactive accounts can be re-enabled. Duplicate correction remains
+  customer-controlled: identify, optionally rename, then safely remove/archive
+  the unwanted account; no automatic merge was added.
+
+### Files changed in this update
+
+- `backend/app/api/mvp.py`
+- `backend/tests/test_mvp_flow.py`
+- `frontend/src/Workspace.tsx`
+- `frontend/src/Workspace.test.tsx`
+- `frontend/src/api.ts`
+- `frontend/src/styles.css`
+
+No database migration or unrelated application/configuration file was added.
+
+### Validation and acceptance evidence
+
+- Backend focused suite: `backend/tests/test_mvp_flow.py` — **34 passed**.
+  Coverage includes rename preservation, exact-name removal confirmation,
+  balance/history retention, inactive-list hiding, history-preserving archive,
+  and duplicate correction without merging.
+- Focused frontend suite: `AccountSetupPanel.test.tsx` and
+  `Workspace.test.tsx` — **29 passed**.
+- Full frontend suite: **129 central-profile tests passed** and **1
+  customer-profile test passed**.
+- Production and customer builds: **passed**.
+- Lint: **0 errors, 4 pre-existing warnings**.
+- Python compileall and `git diff --check`: **passed**.
+- The previously recorded full backend run remains inconclusive after reaching
+  65% and stalling without failure output; it was not rerun solely for this
+  focused account-management change.
+- No screenshots were captured; the UI evidence is the focused interaction
+  tests and the successful central/customer production builds.
+
+### Security and scope review
+
+- Display-name editing does not alter canonical provider identity or provider
+  relationships.
+- Removal preserves ledger, bet, offer, correction, connection, and audit-event
+  history whenever any such dependency exists.
+- No bookmaker passwords, bookmaker login credentials, customer private-VPS
+  data, TOTP material, private keys, provider integrations, Stripe, DNS/HTTPS,
+  ACME, AWS, scraping, email ingestion, or deployment scope was introduced.
+- Changed-file review found no credential-like material or unrelated files.
+
+### A-07 status split
+
+- **IMPLEMENTED:** YES — display-name editing, safe removal/archive,
+  inactive-account visibility, and duplicate correction are implemented in PR
+  #245.
+- **TESTED:** YES — focused backend/frontend coverage, full frontend tests,
+  builds, lint, compileall, and diff checks passed; full backend remains
+  inconclusive as recorded above.
+- **DEPLOYED:** NO — not authorized.
+- **ACCEPTED-PROVEN LIVE:** NO — no customer live installation acceptance has
+  been performed.
+
+REMAINING LIMITATION: the ordinary create-account path records an opening
+ledger entry and creation audit event, so normal customer-created accounts
+take the history-preserving archive path; the dependency-free hard-delete
+branch remains available for genuinely unreferenced records but was not
+exercised through the customer UI.
+
+NEXT TASK: obtain independent Owner review and approval of PR #245 including
+this account-management extension. If approved, use a separate explicit
+merge/deployment gate; do not merge or deploy as part of this PAD update.
