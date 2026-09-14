@@ -1880,3 +1880,50 @@ NEXT TASK: Owner performs the post-deployment iPad portrait/landscape acceptance
 checks for the My Money grouping, Betfair presentation, responsive account
 form, and labelled Account opened field. Do not mark Proud-to-Release UX
 complete until those checks are recorded.
+
+## 34. PR #249 merged and deployed — compact Account opened control (2026-09-14)
+
+The final bounded My Money date-field UX polish was merged and deployed after
+Owner approval.
+
+### Release identity
+
+- PR: [#249](https://github.com/ibettison/layMatchedBetting/pull/249) — MERGED.
+- Implementation HEAD: `e751340118e8e4f9b3df3265ce751d3d1c133cb5`.
+- Merge commit / resulting `main` SHA:
+  `dfd7d47e928ebd7cbe5b6e7937a424de7ce91255`.
+- Deployment command: `sudo /opt/laymatched-betting/update.sh`.
+- Deployed checkout SHA verified as
+  `dfd7d47e928ebd7cbe5b6e7937a424de7ce91255`.
+
+### Deployment evidence
+
+- Candidate API and web images built successfully.
+- API, web, and PostgreSQL containers reported healthy.
+- API health: **200**.
+- Central application shell `/`: **200**.
+- Central application `/app/`: **200**.
+- Protected bankroll API without session: **401**.
+- Owner session route: **200**.
+- Rollback snapshot retained at
+  `/opt/laymatched-betting/.deployment-backups/20260914T201816Z-dfd7d47/`.
+- Migration compatibility remained **unknown** because the Alembic revision
+  was unchanged; no migration was required.
+- Docker Compose warned that Buildx is unavailable; candidate images built and
+  deployment completed successfully.
+
+### Status
+
+- **A-07 IMPLEMENTED:** YES.
+- **A-07 TESTED:** YES.
+- **A-07 DEPLOYED:** YES — resulting `main` SHA is deployed and healthy.
+- **LIVE ACCEPTANCE:** PENDING OWNER DEVICE CHECK for the compact Account
+  opened control and the previously listed My Money acceptance items.
+- **PROUD-TO-RELEASE UX:** PENDING OWNER ACCEPTANCE.
+
+The Floating Page Section Organiser remains out of scope and unimplemented.
+
+NEXT TASK: Owner completes post-deployment iPad portrait/landscape acceptance
+for grouping, search, Betfair presentation, responsive account form, and the
+compact Account opened date picker; then record the result before marking
+Proud-to-Release UX complete.
