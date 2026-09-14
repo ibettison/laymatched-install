@@ -1435,3 +1435,41 @@ canonical-registry, idempotency, or provider-trust rules changed.
 NEXT TASK: obtain a final independent exact-SHA review of PR #245 at
 `35ba8a0fbb53371d99991c203623ea930bb67f02`; do not merge or deploy until that
 review is GREEN and the Owner gives explicit approval.
+
+## 26. PR #245 merged — A-07 post-merge record (2026-09-14)
+
+PR #245 has now been merged into `main`. Deployment has not been performed.
+
+### Merge identity
+
+- Repository: `ibettison/layMatchedBetting`.
+- PR: `#245` —
+  https://github.com/ibettison/layMatchedBetting/pull/245
+- Approved implementation HEAD: `35ba8a0fbb53371d99991c203623ea930bb67f02`.
+- Resulting merge commit and `main` SHA:
+  `0c4ab02830c83ffc1674279e5992d272093b65a7`.
+- Merge method: standard merge commit.
+
+### A-07 status split
+
+- **IMPLEMENTED:** YES — PR #245 is merged into `main`.
+- **TESTED:** YES — the recorded exact-HEAD focused validation passed; the
+  full backend suite remains **INCONCLUSIVE**, not failed, after stalling at
+  71% on `test_automatic_bootstrap_on_fresh_install` without failure output.
+- **DEPLOYED:** NO.
+- **ACCEPTED-PROVEN LIVE:** NO.
+
+### Remaining deployment/live-validation requirement
+
+A valid customer environment must be deployed using the normal LayMatched
+deployment process, followed by health/smoke checks and Gate 2A live
+acceptance evidence. That evidence must confirm the central artifact does not
+request `/api/activation/onboarding` while the intended customer artifact
+retains the onboarding path. Until that customer-environment evidence exists,
+A-07 is not accepted-proven live.
+
+NEXT TASK: obtain explicit Owner approval for deployment, then deploy the
+merged `main` SHA `0c4ab02830c83ffc1674279e5992d272093b65a7` to the valid
+customer environment and append the health, smoke, artifact-boundary, and
+Gate 2A live-acceptance evidence. Do not claim deployment or live acceptance
+before those checks are completed.
