@@ -1927,3 +1927,52 @@ NEXT TASK: Owner completes post-deployment iPad portrait/landscape acceptance
 for grouping, search, Betfair presentation, responsive account form, and the
 compact Account opened date picker; then record the result before marking
 Proud-to-Release UX complete.
+
+## 35. PR #250 merged and deployed — native date-picker activation fix (2026-09-14)
+
+The follow-up fix for the compact Account opened calendar control was merged
+and deployed after Owner approval. The native input is now a transparent,
+real-size touch target over the calendar icon, while the explicit button keeps
+the `showPicker()` path and fallback activation.
+
+### Release identity
+
+- PR: [#250](https://github.com/ibettison/layMatchedBetting/pull/250) — MERGED.
+- Implementation HEAD: `95be87135adffcaf4c979042740e2b1d31619fcf`.
+- Merge commit / resulting `main` SHA:
+  `01f2113af5bdc6f0fecdb5c37f009084ecb28a82`.
+- Deployment command: `sudo /opt/laymatched-betting/update.sh`.
+- Deployed checkout SHA verified as
+  `01f2113af5bdc6f0fecdb5c37f009084ecb28a82`.
+
+### Deployment evidence
+
+- Candidate API and web images built successfully.
+- API, web, and PostgreSQL containers reported healthy.
+- API health: **200**.
+- Central application shell `/`: **200**.
+- Central application `/app/`: **200**.
+- Protected bankroll API without session: **401**.
+- Owner session route: **200**.
+- Rollback snapshot retained at
+  `/opt/laymatched-betting/.deployment-backups/20260914T202701Z-01f2113/`.
+- Migration compatibility remained **unknown** because the Alembic revision
+  was unchanged; no migration was required.
+- Docker Compose warned that Buildx is unavailable; candidate images built and
+  deployment completed successfully.
+
+### Status
+
+- **A-07 IMPLEMENTED:** YES.
+- **A-07 TESTED:** YES.
+- **A-07 DEPLOYED:** YES — resulting `main` SHA is deployed and healthy.
+- **LIVE ACCEPTANCE:** PENDING OWNER DEVICE CHECK that the calendar control
+  opens on iPad, including portrait and landscape interaction.
+- **PROUD-TO-RELEASE UX:** PENDING OWNER ACCEPTANCE.
+
+The Floating Page Section Organiser remains out of scope and unimplemented.
+
+NEXT TASK: Owner performs the post-deployment iPad acceptance of the compact
+Account opened calendar button/date picker and records whether native date
+selection opens and saves correctly. Do not mark Proud-to-Release UX complete
+until that check is recorded.
