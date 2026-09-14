@@ -1829,3 +1829,54 @@ NEXT TASK: obtain a fresh independent exact-SHA review and Owner approval for
 `dd548de549e7e1c861891c23dc71e3fb9cc874f5`, then place this bounded correction
 into the release workflow. Do not merge or deploy before that review and
 approval.
+
+## 33. PR #248 merged and deployed — Account opened field correction (2026-09-14)
+
+The bounded My Money account-detail date-field correction was added to PR #248,
+merged, and deployed after the requested owner approval.
+
+### Release identity
+
+- PR: [#248](https://github.com/ibettison/layMatchedBetting/pull/248) — MERGED.
+- Approved implementation HEAD:
+  `dd548de549e7e1c861891c23dc71e3fb9cc874f5`.
+- Merge commit / resulting `main` SHA:
+  `0be32f844a8ae959dc79fb2024111a2da079e2e8`.
+- Deployment command: `sudo /opt/laymatched-betting/update.sh`.
+- Deployed checkout SHA verified as
+  `0be32f844a8ae959dc79fb2024111a2da079e2e8`.
+
+### Deployment evidence
+
+- Candidate API and web images built successfully.
+- API container: healthy.
+- Web container: healthy.
+- PostgreSQL container: healthy.
+- API health: **200**.
+- Central application shell `/`: **200**.
+- Central application `/app/`: **200**.
+- Protected bankroll API without session: **401**.
+- Owner session route: **200**.
+- Rollback snapshot retained at
+  `/opt/laymatched-betting/.deployment-backups/20260914T200035Z-0be32f8/`.
+- Migration compatibility remained **unknown** because the Alembic revision
+  was unchanged; no migration was required.
+- Docker Compose warned that Buildx is unavailable; images nevertheless built
+  and deployment completed successfully.
+
+### Status
+
+- **A-07 IMPLEMENTED:** YES.
+- **A-07 TESTED:** YES.
+- **A-07 DEPLOYED:** YES — resulting `main` SHA is deployed and healthy.
+- **LIVE ACCEPTANCE:** PENDING OWNER DEVICE CHECK, including confirmation of
+  the Account opened field on iPad portrait and landscape with empty, loaded,
+  edited, saved, and reopened values.
+- **PROUD-TO-RELEASE UX:** PENDING OWNER ACCEPTANCE.
+
+The Floating Page Section Organiser remains out of scope and unimplemented.
+
+NEXT TASK: Owner performs the post-deployment iPad portrait/landscape acceptance
+checks for the My Money grouping, Betfair presentation, responsive account
+form, and labelled Account opened field. Do not mark Proud-to-Release UX
+complete until those checks are recorded.
