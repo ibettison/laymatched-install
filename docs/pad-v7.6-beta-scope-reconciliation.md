@@ -1655,3 +1655,68 @@ deployment action remains for PR #246.
 NEXT TASK: Owner device-check the deployed My Money UX on iPad portrait and
 landscape, then append the acceptance result. Do not mark Proud-to-Release UX
 complete before that check.
+
+## 30. A-07 account-detail responsive correction — follow-up HEAD (2026-09-14)
+
+PR #246 remains the current My Money Proud-to-Release polish workstream. Owner
+live acceptance confirmed that the new Bookmakers/Exchanges grouping is
+materially improved, but found that account-detail fields could still merge
+visually at iPad/tablet portrait widths.
+
+### Correction record
+
+- Repository: `ibettison/layMatchedBetting`.
+- Workstream branch: `a-07-my-money-polish`.
+- Existing PR #246: already merged at the prior approved HEAD; this follow-up
+  commit is not a new merge or deployment.
+- Exact correction HEAD: `3bc736e62ab29b15a94f80be189f087fbfaf487f`.
+- Commit: `fix: prevent account form overlap on tablets`.
+- Files changed: `frontend/src/styles.css` and
+  `frontend/src/Workspace.test.tsx` only.
+- No Floating Page Section Organiser work was included.
+
+### Exact fix
+
+- Retain two account-form columns above 820px, suitable for desktop and tablet
+  landscape widths.
+- Switch the account form to one column at or below 820px, before iPad portrait
+  controls become cramped.
+- Preserve the existing field order, form behavior, and financial/account
+  semantics.
+- Allow long labels to wrap without forcing neighboring grid cells wider.
+- Add a structural regression confirming all account-detail controls remain in
+  the responsive form grid.
+
+### Validation evidence
+
+- Focused Workspace/AccountSetupPanel tests: **35 passed**.
+- Full central frontend tests: **135 passed** across 17 files.
+- Customer-profile test: **1 passed**.
+- Central production build: passed.
+- Customer production build: passed.
+- Lint: **0 errors**, 4 pre-existing warnings.
+- `git diff --check`: passed.
+- Visual evidence captured at desktop/tablet landscape, tablet portrait, and
+  narrow/mobile widths; landscape retained two columns and portrait/mobile used
+  one column without visible overlap.
+- The follow-up branch commit was pushed, but no merge or deployment was
+  performed.
+
+### Current status
+
+- **A-07 IMPLEMENTED:** YES.
+- **A-07 TESTED:** YES.
+- **A-07 DEPLOYED:** YES for the previously merged PR #245/#246 main release;
+  this responsive correction is **NOT DEPLOYED**.
+- **LIVE ACCEPTANCE:** PENDING OWNER DEVICE CHECK after redeployment of this
+  correction.
+- **PROUD-TO-RELEASE UX:** PENDING OWNER ACCEPTANCE.
+
+Remaining unproven item: the corrected responsive form must be reviewed on the
+Owner’s iPad in portrait and landscape after it is placed into a reviewed,
+merged, and deployed release. The floating Page Section Organiser remains a
+separate future UX item.
+
+NEXT TASK: obtain fresh independent exact-SHA review and Owner approval for
+`3bc736e62ab29b15a94f80be189f087fbfaf487f`, then place the correction into the
+release workflow. Do not merge or deploy before that review and approval.
