@@ -1976,3 +1976,83 @@ NEXT TASK: Owner performs the post-deployment iPad acceptance of the compact
 Account opened calendar button/date picker and records whether native date
 selection opens and saves correctly. Do not mark Proud-to-Release UX complete
 until that check is recorded.
+
+## 36. A-08 customer MFA implementation — PR #251 (2026-09-14)
+
+A-08 customer TOTP MFA is implemented on a new focused branch and submitted
+for independent security review. It is not merged, deployed, or live accepted.
+
+### Release identity
+
+- Repository: `ibettison/layMatchedBetting`.
+- Branch: `a-08-customer-mfa`.
+- PR: [#251](https://github.com/ibettison/layMatchedBetting/pull/251) — OPEN,
+  awaiting independent exact-SHA review.
+- Implementation HEAD: `6509aaf9d840c5c95800f8617ab7f2c8fcf53afd`.
+- Base main SHA at branch creation:
+  `01f2113af5bdc6f0fecdb5c37f009084ecb28a82`.
+
+### What was added
+
+- Password-first login now creates a short-lived database challenge when MFA is
+  enabled; it does not issue a fully authenticated customer session until a
+  valid TOTP or recovery code is verified.
+- Per-customer TOTP secrets use RFC-compatible SHA-1 TOTP with a ±1 30-second
+  step window, replay-counter protection, and constant-time comparisons.
+- Secrets are encrypted with AES-GCM using a key derived from the existing
+  application session secret. Setup responses are explicit enrollment-only
+  material and are marked `Cache-Control: no-store`.
+- Enrollment is disabled until code verification succeeds. Ten recovery codes
+  are generated securely, shown once, and stored only as salted PBKDF2 hashes.
+- MFA authentication epochs invalidate prior sessions after enrollment/reset;
+  protected API middleware checks the epoch and second-factor claim server-side.
+- Reset/re-enrol requires the current authenticated MFA session, password
+  re-authentication, and a current TOTP or recovery code. Reset clears the
+  encrypted secret and signs the customer out.
+- Customer-only responsive settings UI provides local QR setup, manual fallback,
+  clear verification errors, recovery-code presentation, and reset guidance.
+
+### Persistence / migration
+
+- Added Alembic revision `0033_customer_mfa` with durable MFA state and
+  password-first challenge tables. Existing users remain non-MFA by default.
+- Migration head and upgrade from a database stamped at
+  `0032_public_interest_recovery` passed. A full empty-database replay remains
+  blocked by the pre-existing SQLite-incompatible foreign-key operation in
+  migration `0014`; this is not introduced by A-08.
+
+### Validation evidence
+
+- Customer MFA/auth/customer-artifact backend tests: **31 passed**.
+- MVP flow: **45 passed**.
+- Canonical registry and owner operations: **28 passed**.
+- Central frontend: **18 files / 139 tests passed**.
+- Customer-profile frontend: **1 passed**.
+- Central and customer production builds: **passed**.
+- Python compileall, focused changed-file lint, and `git diff --check`:
+  **passed**.
+- Full frontend lint retains one pre-existing error in the A-07 account-date
+  picker expression and four pre-existing warnings.
+- Full backend suite: **INCONCLUSIVE**, not failed; it reached 62% and then
+  produced no failure output through the ten-minute timeout in the previously
+  observed slow region.
+- Headless responsive evidence captured and inspected for desktop, iPad
+  portrait, mobile enrollment/QR/manual key, mobile login challenge, invalid
+  code, and iPad reset/re-authentication screens.
+
+### A-08 status
+
+- **IMPLEMENTED:** YES — exact implementation HEAD recorded above.
+- **TESTED:** YES — focused and relevant broader validation recorded above;
+  full backend suite remains inconclusive.
+- **DEPLOYED:** NO.
+- **ACCEPTED-PROVEN LIVE:** NO.
+
+Outstanding acceptance items are independent exact-SHA security review, owner
+approval, merge, deployment, and trusted-HTTPS customer-device verification.
+No customer secret, MFA bypass, recovery token, credential, or deployment
+material has been added to PAD.
+
+NEXT TASK: obtain a fresh independent exact-SHA security review of PR #251 at
+`6509aaf9d840c5c95800f8617ab7f2c8fcf53afd`; do not merge or deploy before that
+review and explicit Owner approval.
