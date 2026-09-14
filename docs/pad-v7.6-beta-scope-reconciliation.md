@@ -1473,3 +1473,58 @@ merged `main` SHA `0c4ab02830c83ffc1674279e5992d272093b65a7` to the valid
 customer environment and append the health, smoke, artifact-boundary, and
 Gate 2A live-acceptance evidence. Do not claim deployment or live acceptance
 before those checks are completed.
+
+## 27. PR #245 deployed — A-07 post-deployment record (2026-09-14)
+
+Deployment was explicitly approved and completed using the standard
+LayMatched `update.sh` process. This record does not claim live customer
+acceptance.
+
+### Deployment identity and evidence
+
+- Repository: `ibettison/layMatchedBetting`.
+- PR: `#245` — MERGED.
+- Approved implementation HEAD: `35ba8a0fbb53371d99991c203623ea930bb67f02`.
+- Merged `main` / deployed SHA:
+  `0c4ab02830c83ffc1674279e5992d272093b65a7`.
+- Deployment command: `sudo /opt/laymatched-betting/update.sh`.
+- Previous deployed SHA: `ba127526eb266b2137f316c4a402d700363e3fff`.
+- Candidate API and web images built from the merged `main` revision.
+- PostgreSQL pre-update backup created at
+  `/opt/laymatched-betting/.deployment-backups/20260914T065551Z-0c4ab02/postgres.dump`.
+- Deployed checkout SHA verified as
+  `0c4ab02830c83ffc1674279e5992d272093b65a7`.
+- API, web, and database containers reported healthy.
+- Standard health gates passed: API **200**, application **200**, protected
+  API **401**, owner-session **200**.
+- Central site root: **200**.
+- Private application shell at `/app/`: **200**.
+- Deployed bundle contains the A-07 setup, existing-account, truthful-result,
+  and manual-provider-fallback UI strings.
+
+### A-07 status split
+
+- **IMPLEMENTED:** YES — PR #245 is merged into `main`.
+- **TESTED:** YES — exact-HEAD focused validation is recorded in section 25;
+  the full backend suite remains **INCONCLUSIVE**, not failed, after reaching
+  71% and timing out at `test_automatic_bootstrap_on_fresh_install` without
+  failure output.
+- **DEPLOYED:** YES — merged `main` SHA is running through the standard
+  deployment stack and passed all deployment health gates.
+- **ACCEPTED-PROVEN LIVE:** NO.
+
+### Deferred live acceptance evidence
+
+This host exposes the central deployment and private application shell but has
+no separately deployed customer-profile artifact/runtime or authenticated
+customer session for the requested live journey. Therefore My Money account
+creation, existing active/paused/restricted/archived account recognition,
+optional balances, created/skipped messaging, manual fallback, rename, and
+safe removal/archive behavior remain **unproven live** here. The existing
+pre-merge UI/backend tests remain the available evidence for those behaviors.
+
+NEXT TASK: use a valid customer environment to perform the authenticated A-07
+live journey and artifact-boundary checks, record the customer health/smoke
+evidence and any deferred Gate 2A acceptance results, and only then consider
+`ACCEPTED-PROVEN LIVE`. Do not claim that status from this central deployment
+alone.
