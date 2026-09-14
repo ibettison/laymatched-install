@@ -1720,3 +1720,56 @@ separate future UX item.
 NEXT TASK: obtain fresh independent exact-SHA review and Owner approval for
 `3bc736e62ab29b15a94f80be189f087fbfaf487f`, then place the correction into the
 release workflow. Do not merge or deploy before that review and approval.
+
+## 31. PR #247 merged and deployed — A-07 tablet form correction (2026-09-14)
+
+The follow-up responsive account-detail correction was independently approved,
+merged, and deployed. The Proud-to-Release UX gate remains pending the Owner’s
+device checks.
+
+### Merge and deployment identity
+
+- Repository: `ibettison/layMatchedBetting`.
+- PR: [#247](https://github.com/ibettison/layMatchedBetting/pull/247) — MERGED.
+- Approved correction HEAD: `3bc736e62ab29b15a94f80be189f087fbfaf487f`.
+- Merge commit / resulting `main` SHA:
+  `440f7f1fde3282b5b0db6c3e6b93522c0d06a561`.
+- Deployment command: `sudo /opt/laymatched-betting/update.sh`.
+- Deployed checkout SHA verified as
+  `440f7f1fde3282b5b0db6c3e6b93522c0d06a561`.
+- PostgreSQL rollback snapshot retained at
+  `/opt/laymatched-betting/.deployment-backups/20260914T191852Z-440f7f1/`.
+
+### Health and smoke evidence
+
+- Updater health gates passed on attempt 2.
+- API health: **200**.
+- Central application shell: **200**.
+- Protected API without session: **401**.
+- Owner session route: **200**.
+- Explicit port-8083 checks: root **200**, `/app/` **200**, `/health` **200`,
+  `/api/bankroll` **401`, and `/api/owner/auth/session` **200**.
+- API, web, and database containers reported healthy.
+- No application-code changes were made during deployment.
+
+### Deployment warnings
+
+- Docker Compose reported Bake configured without `buildx`; candidate images
+  still built successfully.
+- Migration compatibility was reported as **unknown** because the Alembic
+  revision remained `0032_public_interest_recovery` before and after; no
+  migration was required.
+
+### Status
+
+- **IMPLEMENTED:** YES.
+- **TESTED:** YES — focused and full frontend validation passed before merge.
+- **DEPLOYED:** YES — `main` SHA `440f7f1…` is deployed and healthy.
+- **LIVE ACCEPTANCE:** PENDING OWNER DEVICE CHECK — iPad portrait and landscape
+  checks remain required for grouping, collapse/expand, search, Betfair
+  presentation, and account-form spacing.
+- **PROUD-TO-RELEASE UX:** PENDING OWNER ACCEPTANCE.
+
+NEXT TASK: Owner completes the deployed My Money acceptance checks on iPad
+portrait and landscape, then append the result. Do not mark Proud-to-Release
+UX complete before that check.
