@@ -1773,3 +1773,59 @@ device checks.
 NEXT TASK: Owner completes the deployed My Money acceptance checks on iPad
 portrait and landscape, then append the result. Do not mark Proud-to-Release
 UX complete before that check.
+
+## 32. A-07 account-opened date field correction — follow-up (2026-09-14)
+
+Owner iPad acceptance identified one remaining presentation defect in the
+bounded My Money account-detail correction: the existing `opened_at` date input
+was an unlabelled, visually unexplained control below Official website.
+
+### Correction identity and scope
+
+- Workstream branch: `a-07-my-money-polish`.
+- Exact implementation HEAD:
+  `dd548de549e7e1c861891c23dc71e3fb9cc874f5`.
+- Only `frontend/src/Workspace.tsx` and `frontend/src/Workspace.test.tsx`
+  changed for the implementation correction.
+- The existing `opened_at` value, native `type="date"` input, state binding,
+  PATCH contract, save behavior, and field order were preserved.
+- The input is now a labelled account-form field named **Account opened**,
+  using the existing grid sizing and spacing so it remains a normal single-line
+  control on desktop, tablet, and mobile.
+- No Floating Page Section Organiser work was included.
+
+### Validation evidence
+
+- Focused Workspace/AccountSetupPanel tests: **36 passed**.
+- Full central frontend tests: **136 passed** across 17 files.
+- Customer-profile test: **1 passed**.
+- Central production build: passed.
+- Customer production build: passed.
+- Lint: **0 errors**, 4 pre-existing warnings.
+- `git diff --check`: passed.
+- Focused regression confirms the accessible **Account opened** label, native
+  date type, loaded `opened_at` value, changed value, and PATCH payload.
+- Fresh local-fixture visual evidence captured for tablet landscape, tablet
+  portrait, and narrow/mobile layouts; the field is labelled, single-line, and
+  does not overlap neighboring fields.
+- No backend files were changed; no backend validation was required.
+
+### Current status
+
+- **A-07 IMPLEMENTED:** YES.
+- **A-07 TESTED:** YES.
+- **A-07 DEPLOYED:** YES for the previously merged/deployed release;
+  this account-opened-date correction is **NOT DEPLOYED**.
+- **LIVE ACCEPTANCE:** PENDING OWNER DEVICE CHECK after this correction is
+  independently reviewed, merged, and redeployed.
+- **PROUD-TO-RELEASE UX:** PENDING OWNER ACCEPTANCE.
+
+Remaining unproven item: Owner must verify the corrected Account opened field
+on iPad portrait and landscape after release, including empty, loaded, edited,
+saved, and reopened values. The floating Page Section Organiser remains a
+separate future UX item.
+
+NEXT TASK: obtain a fresh independent exact-SHA review and Owner approval for
+`dd548de549e7e1c861891c23dc71e3fb9cc874f5`, then place this bounded correction
+into the release workflow. Do not merge or deploy before that review and
+approval.
