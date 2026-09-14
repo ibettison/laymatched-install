@@ -1595,3 +1595,63 @@ independently reviewed, approved, merged, and deployed.
 NEXT TASK: obtain an independent exact-SHA review of PR #246 at
 `c36e435516d418c38857b1693c465c60272eb6d8`. Do not merge or deploy PR #246
 before that review and explicit Owner approval.
+
+## 29. PR #246 merged and deployed — A-07 Proud-to-Release UX (2026-09-14)
+
+PR #246 was approved after an independent GREEN review, merged into `main`,
+and deployed using the normal LayMatched deployment process. Proud-to-Release
+UX remains pending the Owner’s device-level acceptance checks.
+
+### Merge and deployment identity
+
+- Repository: `ibettison/layMatchedBetting`.
+- PR: `#246` — MERGED.
+- Approved implementation HEAD: `c36e435516d418c38857b1693c465c60272eb6d8`.
+- Merge commit / resulting `main` SHA:
+  `62c3fcdf9c00b7b71845e18480b92e1e35c4e850`.
+- Deployment command: `sudo /opt/laymatched-betting/update.sh`.
+- Deployed checkout SHA verified as
+  `62c3fcdf9c00b7b71845e18480b92e1e35c4e850`.
+- Candidate API and web images built successfully from the resulting `main`.
+- PostgreSQL rollback snapshot retained at
+  `/opt/laymatched-betting/.deployment-backups/20260914T082829Z-62c3fcd/`.
+
+### Health and smoke evidence
+
+- API health: **200**.
+- Central application shell: **200**.
+- Protected API without session: **401**.
+- Owner session route: **200**.
+- Explicit post-deployment checks on port 8083: root **200**, `/app/` **200`,
+  `/health` **200**, `/api/bankroll` **401**, and
+  `/api/owner/auth/session` **200**.
+- API, web, and database containers reported healthy.
+- No application-code changes were made during deployment.
+
+### Deployment warnings
+
+- Docker Compose reported that Bake was configured but `buildx` was not
+  installed; the candidate images still built successfully.
+- Migration compatibility was reported as **unknown** because the Alembic
+  revision remained `0032_public_interest_recovery` before and after the
+  deployment; no migration was required.
+
+### A-07 status split
+
+- **IMPLEMENTED:** YES — PR #245 and the PR #246 UX polish are merged into
+  `main`.
+- **TESTED:** YES — pre-merge functional/regression/build evidence is recorded
+  in sections 28 and the PR records.
+- **DEPLOYED:** YES — resulting `main` SHA is deployed and passed health gates.
+- **LIVE ACCEPTANCE:** PENDING OWNER DEVICE CHECK — the Owner will verify the
+  My Money grouping, collapse/expand, search, Betfair presentation, and
+  portrait/landscape form spacing on iPad.
+- **PROUD-TO-RELEASE UX:** PENDING OWNER ACCEPTANCE.
+
+Anything beyond the automated/local evidence and the deployment smoke checks
+remains unproven until the Owner completes those device checks. No merge or
+deployment action remains for PR #246.
+
+NEXT TASK: Owner device-check the deployed My Money UX on iPad portrait and
+landscape, then append the acceptance result. Do not mark Proud-to-Release UX
+complete before that check.
