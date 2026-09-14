@@ -1528,3 +1528,70 @@ live journey and artifact-boundary checks, record the customer health/smoke
 evidence and any deferred Gate 2A acceptance results, and only then consider
 `ACCEPTED-PROVEN LIVE`. Do not claim that status from this central deployment
 alone.
+
+## 28. A-07 Proud-to-Release My Money UX polish — PR #246 (2026-09-14)
+
+This record appends the owner-confirmed post-deployment acceptance state and
+the next, deliberately separate UX-polish workstream. A-07 functional live
+acceptance succeeded after PR #245 was merged and deployed. The earlier
+deferred-live note in section 27 is preserved as history; this record reflects
+the later acceptance evidence supplied for the completed A-07 workstream.
+
+### Proud-to-Release findings
+
+The visual review identified three focused My Money issues:
+
+1. Long bookmaker/exchange account lists needed clearer organisation.
+2. The catalogue presentation of Betfair was ambiguous between bookmaker and
+   exchange.
+3. The tablet account-detail form needed stronger spacing and grid-cell
+   containment.
+
+### PR and implementation record
+
+- Repository: `ibettison/layMatchedBetting`.
+- New branch: `a-07-my-money-polish`.
+- New PR: [#246](https://github.com/ibettison/layMatchedBetting/pull/246).
+- Exact implementation HEAD: `c36e435516d418c38857b1693c465c60272eb6d8`.
+- PR #245 remains merged and deployed; this UX-polish PR is **UNMERGED** and
+  **NOT DEPLOYED**.
+- The change is limited to My Money grouping/search/collapse presentation,
+  explicit Betfair Sportsbook/Betfair Exchange presentation, responsive account
+  form spacing, and focused regressions. Financial calculations, bankroll
+  semantics, archive/removal rules, and A-07 bulk-create behavior are not
+  changed.
+
+### Validation evidence
+
+- Focused frontend Workspace/AccountSetupPanel tests: **34 passed**.
+- Full central frontend tests: **134 passed** across 17 files.
+- Customer-profile test: **1 passed**.
+- Backend `test_mvp_flow.py`: **45 passed**.
+- Backend canonical registry tests: **6 passed**.
+- Python `compileall`: passed.
+- Central production build: passed.
+- Customer production build: passed.
+- Lint: **0 errors**, 4 pre-existing warnings.
+- `git diff --check`: passed.
+- Local fixture visual evidence captured for desktop/tablet expanded groups,
+  tablet form layout, narrow/mobile collapsed groups, and Betfair Exchange
+  presentation.
+
+### A-07 status split
+
+- **IMPLEMENTED:** YES — PR #245 is merged into `main`.
+- **TESTED:** YES — functional and regression evidence is recorded above; the
+  full backend suite remains **INCONCLUSIVE**, not failed, per the prior PAD
+  record.
+- **DEPLOYED:** YES — PR #245 merged `main` is deployed.
+- **ACCEPTED-PROVEN LIVE:** YES for the completed A-07 functional journey,
+  based on the owner-confirmed successful live acceptance.
+- **PROUD-TO-RELEASE UX:** IN PROGRESS — PR #246 is the unmerged,
+  undeployed polish work.
+
+Anything not proven live for the new polish remains deferred until PR #246 is
+independently reviewed, approved, merged, and deployed.
+
+NEXT TASK: obtain an independent exact-SHA review of PR #246 at
+`c36e435516d418c38857b1693c465c60272eb6d8`. Do not merge or deploy PR #246
+before that review and explicit Owner approval.
