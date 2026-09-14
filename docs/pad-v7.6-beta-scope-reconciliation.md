@@ -1326,6 +1326,65 @@ NEXT TASK: obtain a fresh independent exact-SHA review of PR #245 at
 `059c31e82d65ef1997d84c336f674ab8904bcf47`; do not merge or deploy until that
 review is GREEN and the Owner gives explicit approval.
 
+## 25. Final account-setup UX correction — PR #245 (2026-09-14)
+
+This record appends the final P2 UX correction for A-07. PR #245 remains
+**UNMERGED** and **UNDEPLOYED**.
+
+### Implementation identity
+
+- Repository: `ibettison/layMatchedBetting`.
+- PR: `#245` —
+  https://github.com/ibettison/layMatchedBetting/pull/245
+- Branch: `a-07-fast-account-onboarding`.
+- Previous HEAD: `059c31e82d65ef1997d84c336f674ab8904bcf47`.
+- New exact implementation HEAD: `35ba8a0fbb53371d99991c203623ea930bb67f02`.
+- Commit: `fix: recognise inactive accounts in setup`.
+
+### Remaining P2 finding and exact fix
+
+The setup panel previously received only active accounts, so paused,
+restricted, and archived providers could appear selectable again even though
+the API would safely skip their duplicate creation.
+
+`BankrollPanel` now passes the union of active and inactive accounts to
+`AccountSetupPanel`, while the existing active/inactive account presentation
+is unchanged. The panel therefore identifies every existing provider slug as
+already in My Money and disables it as a new selection. Bulk completion text is
+now derived from the API's actual `created` and `skipped` results, including
+mixed and all-skipped outcomes. No financial-state, archive/removal,
+canonical-registry, idempotency, or provider-trust rules changed.
+
+### Validation evidence
+
+- Focused AccountSetupPanel and Workspace tests: **32 passed**.
+- Full central frontend tests: **132 passed** in 17 files.
+- Customer-profile test: **1 passed**.
+- Focused backend A-07 tests: **18 passed**.
+- Central production build: **passed**.
+- Customer production build: **passed**.
+- Lint: **0 errors, 4 pre-existing warnings**.
+- Python compileall: **passed**.
+- `git diff --check`: **passed**.
+- No backend files changed in this increment. The latest full backend result
+  remains **INCONCLUSIVE** at the prior exact HEAD, where 456 tests reached 71%
+  before timing out at `test_automatic_bootstrap_on_fresh_install` without
+  failure output.
+- Implementation worktree was clean after commit and push.
+
+### Current A-07 status split
+
+- **IMPLEMENTED:** YES — the remaining account-setup recognition and result
+  messaging defect is fixed at `35ba8a0fbb53371d99991c203623ea930bb67f02`.
+- **TESTED:** YES — focused and full requested frontend checks, focused backend
+  checks, builds, lint, compile, and diff validation passed.
+- **DEPLOYED:** NO.
+- **ACCEPTED-PROVEN LIVE:** NO.
+
+NEXT TASK: obtain a final independent exact-SHA review of PR #245 at
+`35ba8a0fbb53371d99991c203623ea930bb67f02`; do not merge or deploy until that
+review is GREEN and the Owner gives explicit approval.
+
 ## 24. Exact-HEAD validation record — PR #245 (2026-09-13)
 
 This record appends execution evidence for the exact implementation HEAD. PR
