@@ -2374,3 +2374,61 @@ ambiguous legacy `compatible` field.
 NEXT TASK: obtain a final independent exact-SHA review of PR #252 at
 `e4ef50b1cc045e4c241544976cc347897b5b9cdc`; do not merge or deploy before that
 review and explicit Owner approval.
+
+## 42. PR #252 merged; customer deployment blocked and recovered (2026-09-15)
+
+PR #252 was merged after Owner authorization, but the resulting customer
+deployment was not successful. The candidate customer API failed during
+startup migration because the customer image omits migration
+`0024_marketing_leads` while later migrations still reference it. This is a
+customer-artifact migration-chain defect discovered during deployment; it is
+not an A-08 MFA behavior change.
+
+### Release and recovery identity
+
+- PR: [#252](https://github.com/ibettison/layMatchedBetting/pull/252) —
+  **MERGED**.
+- Approved implementation HEAD:
+  `e4ef50b1cc045e4c241544976cc347897b5b9cdc`.
+- Merge commit and resulting `main` SHA:
+  `92e58c9f3ec044962c28591eed4282c782ac92b2`.
+- Deployment attempt: `/opt/laymatched-betting/update.sh` from `4865091` to
+  `92e58c9`.
+- Final live runtime after recovery: prior `4865091` release; merged
+  `92e58c9` is **NOT DEPLOYED**.
+
+### Deployment evidence
+
+- Candidate customer API startup: **FAILED** — Alembic could not resolve
+  `0024_marketing_leads` referenced by a later migration.
+- Pre-update PostgreSQL snapshot restoration: **SUCCEEDED**.
+- Automatic rollback health: **NOT GREEN**; previous API remained in restart
+  loop because the updater’s previous image retag did not recover the runtime.
+- Recovery: retained pre-deployment central API/web images containing the A-08
+  migration were restored and recreated without changing source or database
+  data.
+- Post-recovery API health: **200**.
+- Root application: **200**.
+- Legacy `/app/`: **200**.
+- Protected API without session: **401**.
+- Owner session health: **200**.
+- API, web, and PostgreSQL containers: **healthy**.
+- The deployment result and recovery evidence were posted to PR #252 in
+  [comment #5677393931](https://github.com/ibettisson/layMatchedBetting/pull/252#issuecomment-5677393931).
+
+### A-08 / deployment status
+
+- **IMPLEMENTED:** YES — PR #252 is merged.
+- **TESTED:** YES — bounded implementation validation passed before merge.
+- **DEPLOYED:** NO — the merged customer deployment failed its startup
+  migration gate and live runtime was restored to `4865091`.
+- **ACCEPTED-PROVEN LIVE:** NO.
+
+No production customer data was intentionally modified, and no MFA key was
+regenerated. The customer artifact migration chain must be corrected and
+validated before another deployment attempt.
+
+NEXT TASK: create a bounded customer-artifact migration-chain correction for
+the missing `0024_marketing_leads` dependency, obtain independent exact-SHA
+review, and only then retry controlled deployment. Do not claim PR #252 is
+deployed or A-08 live-accepted.
