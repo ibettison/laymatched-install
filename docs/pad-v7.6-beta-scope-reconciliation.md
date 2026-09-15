@@ -2432,3 +2432,88 @@ NEXT TASK: create a bounded customer-artifact migration-chain correction for
 the missing `0024_marketing_leads` dependency, obtain independent exact-SHA
 review, and only then retry controlled deployment. Do not claim PR #252 is
 deployed or A-08 live-accepted.
+
+## 43. Customer migration-chain correction deployed (2026-09-15)
+
+The bounded follow-up corrected the legacy customer artifact migration chain
+and completed a controlled deployment retry. The customer image now retains
+the complete Alembic chain, including `0024_marketing_leads`, while continuing
+to exclude central runtime modules. This preserves the customer/central
+artifact boundary and allows later migrations, including `0033_customer_mfa`,
+to resolve their declared parents.
+
+### Release identity
+
+- PR: [#253](https://github.com/ibettison/layMatchedBetting/pull/253) —
+  **MERGED**.
+- Branch: `a-08-customer-migration-chain`.
+- Implementation HEAD: `407edc1a74549b7a93b7d9b1bfa3ca835f365767`.
+- Merge commit and resulting `main` SHA:
+  `2dff9f41e32fb2c93d3d28a9980ba3df8ea8d873`.
+
+### Exact correction
+
+- Customer `backend/Dockerfile` now removes only `app/central_models.py` and
+  retains the complete `alembic/` directory.
+- Customer artifact tests assert that `0024_marketing_leads.py` is present and
+  the migration script resolves head `0033_customer_mfa`.
+- An isolated customer image migrated a fresh PostgreSQL database through every
+  revision to `0033_customer_mfa`.
+- The migration-policy resolver now treats identical old/new revisions as a
+  permitted no-op with rollback database compatibility, which is required for
+  safe redeployment of installations already at `0033_customer_mfa`.
+
+### Deployment and recovery evidence
+
+- First retry from the recovered legacy checkout correctly built the customer
+  candidate, but the old loaded updater probed the customer root as `/app/`;
+  the customer artifact intentionally redirects `/app/` to `/`, so the health
+  gate rejected that candidate with `302`.
+- The updater restored the PostgreSQL snapshot. The old API image tag was not
+  recovered automatically, so the central API was rebuilt from the explicitly
+  restored `4865091` checkout before retrying. No production customer data or
+  MFA key was changed or regenerated.
+- The successful retry used the customer-aware updater from the merged release
+  against `/opt/laymatched-betting` and completed:
+  `4865091 -> 2dff9f4`.
+- API health: **200**; customer root: **200**; protected bankroll without a
+  session: **401**; customer session endpoint: **200**.
+- API, web, and PostgreSQL containers: **healthy**.
+- Live database revision: `0033_customer_mfa`.
+- Live customer API artifact check: central runtime modules absent; complete
+  migration chain present; migration head `0033_customer_mfa`.
+- Deployment snapshot retained at
+  `/opt/laymatched-betting/.deployment-backups/20260915T092300Z-2dff9f4`.
+
+### Validation evidence
+
+- Customer artifact boundary tests: **6 passed**.
+- Customer artifact and migration revision tests: **22 passed**, with one
+  pre-existing Alembic deprecation warning.
+- Customer upgrade/migration-policy/rollback tests: **16 passed**.
+- Customer artifact build and filesystem/chain inspection: **passed**.
+- Isolated PostgreSQL customer-image migration: **passed**, ending at
+  `0033_customer_mfa`.
+- Shell syntax, Python compilation, Compose config rendering, and
+  `git diff --check`: **passed**.
+
+### A-08 status
+
+- **IMPLEMENTED:** YES — A-08 and the required legacy customer deployment-path
+  correction are merged.
+- **TESTED:** YES — focused migration-chain, customer-boundary, policy,
+  rollback, artifact-build, and live health validation passed.
+- **DEPLOYED:** YES — resulting `main` SHA `2dff9f41e32fb2c93d3d28a9980ba3df8ea8d873`
+  is running in the customer profile.
+- **ACCEPTED-PROVEN LIVE:** NO — the owner has not yet completed the live MFA
+  enrolment, QR/manual-secret, recovery, disable/reset, and re-login journey
+  through the trusted customer hostname.
+
+No unrelated application behavior was changed in PR #253. No credentials,
+MFA secrets, or production customer records were exposed or intentionally
+modified.
+
+NEXT TASK: perform the owner-controlled live A-08 acceptance journey through
+the trusted customer HTTPS hostname, including MFA setup, valid/invalid code
+handling, recovery/reset, persistence, and password-plus-TOTP re-login; then
+record ACCEPTED-PROVEN LIVE only if that evidence succeeds.
