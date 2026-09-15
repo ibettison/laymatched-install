@@ -2318,3 +2318,59 @@ making that distinction executable and explicit.
 NEXT TASK: obtain a fresh independent exact-SHA review of PR #252 at
 `461531bcb336334d68ebcb3d1f09160b8ca6ae55`; do not merge or deploy before that
 review and explicit Owner approval.
+
+## 41. A-08 legacy metadata compatibility correction — PR #252 (2026-09-15)
+
+The final independent review identified one remaining legacy-upgrade edge case:
+an obsolete local `.migration-metadata.json` could shadow the packaged policy
+and be unreadable by the new parser. The correction does not reinterpret the
+ambiguous legacy `compatible` field.
+
+### Release identity
+
+- Repository: `ibettison/layMatchedBetting`.
+- Branch: `a-08-customer-deployment`.
+- PR: [#252](https://github.com/ibettison/layMatchedBetting/pull/252) —
+  **OPEN / UNMERGED**.
+- Corrected implementation HEAD:
+  `e4ef50b1cc045e4c241544976cc347897b5b9cdc`.
+- Previous reviewed HEAD:
+  `461531bcb336334d68ebcb3d1f09160b8ca6ae55`.
+
+### Exact correction
+
+- The executable migration-policy resolver considers a local metadata file
+  only when it contains the current explicit fields for the exact upgrade:
+  `forward_migration` and `rollback_database_compatible`.
+- Missing local metadata, obsolete `compatible` metadata, malformed local
+  metadata, or local metadata without an exact valid policy cannot shadow the
+  packaged reviewed policy.
+- The packaged reviewed policy is used when available; if neither source has
+  an explicit valid policy, resolution fails closed.
+- For `0032_public_interest_recovery -> 0033_customer_mfa`, forward migration
+  remains permitted and rollback still requires successful restoration of the
+  pre-update PostgreSQL snapshot before old application images restart.
+
+### Validation evidence
+
+- Customer upgrade, migration-policy, rollback, and customer-boundary
+  regressions: **15 passed**.
+- Coverage includes absent local metadata fallback, valid current local
+  override, legacy-format fallback, malformed/unknown fail-closed behavior,
+  the full `0032 -> 0033` decision, missing/failed snapshot protection, and
+  restore-before-restart ordering.
+- Shell syntax, policy compilation, backend `compileall`, Compose render
+  validation, and `git diff --check`: **passed**.
+- No MFA authentication behavior or production state was changed.
+
+### A-08 status
+
+- **IMPLEMENTED:** YES — legacy metadata selection is corrected at the exact
+  HEAD above.
+- **TESTED:** YES — bounded deployment/migration/rollback validation passed.
+- **DEPLOYED:** NO — PR #252 remains unmerged.
+- **ACCEPTED-PROVEN LIVE:** NO.
+
+NEXT TASK: obtain a final independent exact-SHA review of PR #252 at
+`e4ef50b1cc045e4c241544976cc347897b5b9cdc`; do not merge or deploy before that
+review and explicit Owner approval.
