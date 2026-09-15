@@ -2255,3 +2255,66 @@ customer data has been added to PAD.
 NEXT TASK: obtain a fresh independent exact-SHA review of PR #252 at
 `4ed0038bc1050ab2bc31bd41da436dcf0d7256dc`; do not merge or deploy before that
 review and explicit Owner approval.
+
+## 40. A-08 migration rollback-policy clarification — PR #252 (2026-09-15)
+
+The independent review of PR #252 found one bounded migration-safety ambiguity:
+the field `compatible: false` did not distinguish an allowed forward migration
+from an unsafe rollback of old application images against the migrated schema.
+This correction preserves the customer deployment and legacy MFA-key work while
+making that distinction executable and explicit.
+
+### Release identity
+
+- Repository: `ibettison/layMatchedBetting`.
+- Branch: `a-08-customer-deployment`.
+- PR: [#252](https://github.com/ibettison/layMatchedBetting/pull/252) —
+  **OPEN / UNMERGED**.
+- Corrected implementation HEAD:
+  `461531bcb336334d68ebcb3d1f09160b8ca6ae55`.
+- Previous reviewed HEAD:
+  `4ed0038bc1050ab2bc31bd41da436dcf0d7256dc`.
+
+### Exact semantics and correction
+
+- `forward_migration: "permitted"` means the reviewed forward Alembic
+  migration may be applied.
+- `rollback_database_compatible: false` means the previous application images
+  must not run against the migrated database; rollback must restore the
+  pre-update PostgreSQL snapshot first.
+- Missing, malformed, unknown, or blocked policy fails closed.
+- Rollback now leaves application containers stopped when the snapshot is
+  missing or restoration fails; it cannot restart old images against an
+  uncertain schema.
+- The `0032_public_interest_recovery -> 0033_customer_mfa` entry explicitly
+  permits the forward migration and requires database restoration for rollback.
+
+### Validation evidence
+
+- Exact policy/upgrade/rollback regression suite:
+  **14 passed**. This executes the policy helper for the `0032 -> 0033` path,
+  verifies unknown and blocked forward decisions fail closed, and exercises
+  missing-snapshot, failed-restore, and successful restore-before-restart
+  rollback branches with isolated mock services.
+- Current customer Compose boundary tests are included in the 14 passed.
+- Current shell syntax, Python policy compilation, backend `compileall`,
+  Compose render validation, and `git diff --check`: **passed**.
+- The previously recorded focused backend customer-artifact/MFA/deployment/
+  migration suites remain **32 passed** at the prior implementation HEAD; no
+  backend application files changed in this bounded clarification.
+- Full backend suite remains **INCONCLUSIVE**, not failed.
+- No live installation, production database, or production MFA key was
+  changed.
+
+### A-08 status
+
+- **IMPLEMENTED:** YES — migration policy semantics and rollback guard are
+  implemented at the corrected HEAD.
+- **TESTED:** YES — bounded deployment/migration/rollback tests and static
+  validation passed.
+- **DEPLOYED:** NO — PR #252 remains unmerged.
+- **ACCEPTED-PROVEN LIVE:** NO.
+
+NEXT TASK: obtain a fresh independent exact-SHA review of PR #252 at
+`461531bcb336334d68ebcb3d1f09160b8ca6ae55`; do not merge or deploy before that
+review and explicit Owner approval.
