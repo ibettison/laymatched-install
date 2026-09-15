@@ -2175,3 +2175,83 @@ trusted HTTPS hostname, including enrollment, second-factor login, recovery or
 reset, and restart/upgrade persistence; then record whether A-08 is
 ACCEPTED-PROVEN LIVE. Do not begin a new security feature before that gate is
 recorded.
+
+## 39. A-08 legacy customer deployment-path repair — PR #252 (2026-09-15)
+
+The A-08 live diagnostic identified a pre-existing upgrade/deployment-path
+defect on older customer installations: the default Compose configuration
+selected the central API/web build targets even though A-08 MFA is correctly
+customer-artifact-only. The diagnostic also found that legacy installations
+did not receive a missing durable MFA encryption key automatically and that
+the tracked migration compatibility metadata was absent from the deployment
+path. This correction addresses those deployment concerns without changing
+MFA cryptography, TOTP behavior, recovery codes, or authentication semantics.
+
+### Release identity
+
+- Repository: `ibettison/layMatchedBetting`.
+- Branch: `a-08-customer-deployment`.
+- PR: [#252](https://github.com/ibettison/layMatchedBetting/pull/252) —
+  **OPEN / UNMERGED**.
+- Implementation HEAD: `4ed0038bc1050ab2bc31bd41da436dcf0d7256dc`.
+- Base: `main` at `4865091449e8d5f4d4835a0b63a807cd9fe76cd2`.
+
+### Implementation
+
+- Default customer Compose now selects the `customer` API and web targets;
+  central Owner credential wiring is not passed through that profile.
+- Customer health gates use the customer root application and customer session
+  route.
+- Legacy `.env` upgrades use an idempotent helper: a missing
+  `AUTH_MFA_ENCRYPTION_KEY` is generated once and persisted with mode `600`;
+  valid existing values are preserved; malformed or duplicate values fail
+  closed; the value is never printed.
+- The release carries reviewed migration metadata for
+  `0032_public_interest_recovery -> 0033_customer_mfa`. The metadata records
+  that downgrade compatibility is not tested, and unknown compatibility now
+  fails safely rather than leaving an updated installation running without a
+  decision. Rollback of this known untested downgrade uses the pre-update
+  database backup.
+- Controlled deployment documentation now describes the customer artifact
+  and metadata location. No live installation or production data was changed.
+
+### Validation evidence
+
+- Upgrade-path and customer-artifact boundary tests: **10 passed**.
+- Focused backend customer-artifact, MFA, deployment-auth-config, and
+  migration-revision tests: **32 passed** with one existing Alembic
+  deprecation warning.
+- Customer artifact build/inspection: **passed**.
+- Explicit central web/API target builds and central API import smoke check:
+  **passed**.
+- Rendered Compose validation: **passed**; API and web targets both resolve to
+  `customer` and the customer profile contains no central Owner credential
+  wiring.
+- Python `compileall`: **passed**.
+- Shell syntax (`bash -n install.sh update.sh
+  scripts/ensure-mfa-encryption-key.sh`): **passed**.
+- `git diff --check`: **passed**.
+- Full backend suite: not rerun for this bounded deployment/configuration
+  correction; the previously recorded full-suite result remains
+  **INCONCLUSIVE**, not failed.
+
+### A-08 status
+
+- **IMPLEMENTED:** YES — the legacy customer deployment-path correction is
+  implemented at the exact HEAD above.
+- **TESTED:** YES — focused deployment, customer-boundary, MFA/configuration,
+  migration, build, and static validation passed.
+- **DEPLOYED:** NO — PR #252 is not merged and no live installation was
+  changed.
+- **ACCEPTED-PROVEN LIVE:** NO.
+
+Remaining acceptance evidence is a fresh independent exact-SHA review of PR
+#252, followed by explicit Owner approval before merge and deployment. After a
+successful deployment, the old installation still requires live verification
+that the customer artifact is served, A-08 setup is discoverable, and the
+legacy key/migration path behaves as recorded. No sensitive key value or
+customer data has been added to PAD.
+
+NEXT TASK: obtain a fresh independent exact-SHA review of PR #252 at
+`4ed0038bc1050ab2bc31bd41da436dcf0d7256dc`; do not merge or deploy before that
+review and explicit Owner approval.
