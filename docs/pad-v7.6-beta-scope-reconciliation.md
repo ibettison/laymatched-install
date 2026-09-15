@@ -2119,3 +2119,59 @@ other sensitive values were added to PAD.
 NEXT TASK: obtain a fresh independent exact-SHA security review of PR #251 at
 `f78de8ef71dd9cd254a7c8211af0f698ded4c32d`; do not merge or deploy before that
 review and explicit Owner approval.
+
+## 38. A-08 customer MFA merged and deployed (2026-09-15)
+
+PR #251 has passed the fresh independent exact-SHA security review and has
+been merged and deployed. The dedicated MFA encryption-key correction is part
+of the deployed release.
+
+### Release identity
+
+- Repository: `ibettison/layMatchedBetting`.
+- PR: [#251](https://github.com/ibettison/layMatchedBetting/pull/251) —
+  **MERGED**.
+- Approved implementation HEAD:
+  `f78de8ef71dd9cd254a7c8211af0f698ded4c32d`.
+- Merge commit and resulting deployed `main` SHA:
+  `4865091449e8d5f4d4835a0b63a807cd9fe76cd2`.
+
+### Deployment evidence
+
+- Standard deployment: `/opt/laymatched-betting/update.sh` completed
+  successfully from `01f2113` to `4865091`.
+- API health: **200**.
+- Root/customer application: **200**.
+- Protected MFA status without a session: **401**, confirming the auth
+  boundary remains enforced.
+- API, web, and PostgreSQL containers reported healthy.
+- The existing production `.env` had no MFA key because it predated A-08. A
+  fresh persistent key was added without exposing its value; `.env` remains
+  root-owned with mode `600`. The API was recreated and verified with the key
+  configured.
+- Deployment retained a rollback snapshot at
+  `/opt/laymatched-betting/.deployment-backups/20260915T071837Z-4865091`.
+- The deploy script reported migration compatibility as **unknown** while
+  moving from `0032_public_interest_recovery` to `0033_customer_mfa`; the API
+  started healthy and reported revision `0033_customer_mfa`.
+
+### A-08 status
+
+- **IMPLEMENTED:** YES.
+- **TESTED:** YES — focused security/configuration validation passed before
+  merge; deployment health and auth-boundary checks passed after deployment.
+- **DEPLOYED:** YES — resulting `main` SHA is deployed and healthy.
+- **ACCEPTED-PROVEN LIVE:** NO — the complete customer MFA journey through the
+  trusted HTTPS hostname and customer devices has not yet been independently
+  demonstrated.
+
+Remaining acceptance evidence is customer-device verification of enrollment,
+QR/manual setup, password-plus-TOTP login, invalid-code handling,
+recovery/reset, and persistence after restart/upgrade. No MFA secret or other
+sensitive value has been added to PAD.
+
+NEXT TASK: perform controlled live A-08 acceptance through the customer's
+trusted HTTPS hostname, including enrollment, second-factor login, recovery or
+reset, and restart/upgrade persistence; then record whether A-08 is
+ACCEPTED-PROVEN LIVE. Do not begin a new security feature before that gate is
+recorded.
