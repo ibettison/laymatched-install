@@ -2056,3 +2056,66 @@ material has been added to PAD.
 NEXT TASK: obtain a fresh independent exact-SHA security review of PR #251 at
 `6509aaf9d840c5c95800f8617ab7f2c8fcf53afd`; do not merge or deploy before that
 review and explicit Owner approval.
+
+## 37. A-08 MFA encryption-key lifecycle correction — PR #251 (2026-09-15)
+
+The independent security review identified a P1 key-lifecycle issue in the
+previous A-08 implementation: durable customer TOTP secrets were encrypted
+using a key derived from `AUTH_SESSION_SECRET`. This record corrects that
+decision; the prior record remains preserved as history.
+
+### Release identity
+
+- Repository: `ibettison/layMatchedBetting`.
+- Branch: `a-08-customer-mfa`.
+- PR: [#251](https://github.com/ibettison/layMatchedBetting/pull/251) — OPEN,
+  unmerged and undeployed.
+- Corrected implementation HEAD:
+  `f78de8ef71dd9cd254a7c8211af0f698ded4c32d`.
+
+### Security-key decision and implementation
+
+- Added dedicated `AUTH_MFA_ENCRYPTION_KEY` configuration, independent of
+  `AUTH_SESSION_SECRET`.
+- Preserved AES-GCM authenticated encryption and HKDF derivation.
+- Missing or shorter-than-32-character MFA encryption configuration fails
+  closed when MFA secret encryption is required; the key is never logged or
+  returned by the application.
+- Installer and credential generation create the dedicated key, Compose passes
+  it only to the API, and the normal protected `.env` backup path preserves it
+  across restart and upgrade.
+- Production configuration documentation now requires retaining this key when
+  rotating the session-signing secret.
+
+### Validation evidence
+
+- Customer MFA, authentication, throttling, deployment configuration, and
+  migration revision tests: **27 passed**.
+- Regression explicitly encrypts a TOTP secret, changes `AUTH_SESSION_SECRET`,
+  and successfully decrypts with the unchanged MFA key.
+- Missing/invalid dedicated-key encryption failure: **passed**.
+- Compose API wiring and installer preservation assertions: **passed**.
+- Python compileall: **passed**.
+- `bash -n install.sh update.sh`: **passed**.
+- `git diff --check`: **passed**.
+- Frontend suites were not rerun because no frontend files changed in this
+  bounded backend/configuration correction.
+- Full backend suite was not rerun for this bounded correction; the prior
+  recorded full-suite result remains **INCONCLUSIVE**, not failed.
+
+### A-08 status
+
+- **IMPLEMENTED:** YES — dedicated key lifecycle correction is at the exact
+  HEAD recorded above.
+- **TESTED:** YES — 27 focused/relevant tests and static checks passed.
+- **DEPLOYED:** NO.
+- **ACCEPTED-PROVEN LIVE:** NO.
+
+The remaining gate is a fresh independent exact-SHA security review of the
+corrected PR, followed by explicit Owner approval. No merge or deployment has
+been performed, and no customer credentials, TOTP secrets, recovery tokens, or
+other sensitive values were added to PAD.
+
+NEXT TASK: obtain a fresh independent exact-SHA security review of PR #251 at
+`f78de8ef71dd9cd254a7c8211af0f698ded4c32d`; do not merge or deploy before that
+review and explicit Owner approval.
