@@ -3,8 +3,8 @@
 This runbook is for a disposable customer VPS only. It does not use a
 production customer, betting data, or production credentials.
 
-The installer main revision for this run is
-`a7498984ab65e83f16bf4ed37f843662e036dc3c`. The central application revision
+The installer must be checked out from the current head of PR #29, which
+contains the scheduling implementation. The central application revision
 under test is `22ab064d6513ee1bf6c092941bd44052fddfae37`.
 
 ## 1. Prepare and install
@@ -16,7 +16,9 @@ Do not paste either into a shell transcript, issue, or log.
 ```bash
 git clone https://github.com/ibettison/laymatched-install.git
 cd laymatched-install
-git checkout a7498984ab65e83f16bf4ed37f843662e036dc3c
+git fetch origin pull/29/head
+git checkout --detach FETCH_HEAD
+git rev-parse HEAD  # record this as the PR #29 implementation under test
 ACTIVATION_SERVICE_URL=https://<central-recognition-base> sudo -E ./install.sh
 ```
 
@@ -56,11 +58,11 @@ sudo systemctl show laymatched-recognition-heartbeat.service \\
 sudo journalctl -u laymatched-recognition-heartbeat.service -n 20 --no-pager
 ```
 
-Expected: service result `success` and Central records a fresh authenticated
-heartbeat containing only installation ID, application version and service
-status. The service wrapper reports `healthy` only when both customer API and
-web container health checks are healthy; otherwise it reports `degraded` or
-`unknown`.
+Expected: `ExecMainStatus=0`, `Result=success`, and Central records a fresh
+authenticated heartbeat containing only installation ID, application version
+and service status. The service wrapper reports `healthy` only when both
+customer API and web container health checks are healthy; otherwise it reports
+`degraded` or `unknown`.
 
 ## 3. Renewal and non-overlap
 
@@ -81,38 +83,71 @@ sudo systemctl start laymatched-recognition-heartbeat.service
 
 Expected: the client resumes the signed activation session, saves a new
 expiry, and delivers the heartbeat. Start the service twice concurrently if
-desired; one invocation must exit with the documented lock-conflict status
-and the two runs must not overlap.
+desired; one invocation must report lock-conflict exit `76` and the two runs
+must not overlap. Lock contention is not treated as a successful delivery.
+
+For a deterministic lock check on the disposable VPS:
+
+```bash
+sudo flock -n /run/laymatched-recognition-heartbeat.lock -c 'sleep 15' &
+LOCK_HOLDER=$!
+sleep 1
+sudo systemctl start laymatched-recognition-heartbeat.service || true
+wait "$LOCK_HOLDER"
+sudo systemctl show laymatched-recognition-heartbeat.service \\
+  --property=ExecMainStatus,ExecMainCode,Result
+```
+
+Expected: `ExecMainStatus=76`, `Result=exit-code`, with no heartbeat delivery.
 
 ## 4. Outage, durable retry and recovery
 
-Use an unused loopback port to simulate Central being unavailable:
+Use a secure disposable-only backup of the scheduler URL and temporarily point
+the scheduler at an unused loopback port to simulate Central being unavailable:
 
 ```bash
-APP_VERSION=$(sudo awk -F= '$1=="APP_VERSION"{print substr($0,index($0,"=")+1)}' /opt/laymatched/.env)
-sudo python3 /opt/laymatched/recognition_client.py heartbeat \\
-  --state-dir /var/lib/laymatched/activation \\
-  --central-url http://127.0.0.1:9 \\
-  --app-version "$APP_VERSION" --service-status degraded
+sudo cp /etc/laymatched/recognition.env /root/recognition.env.acceptance-backup
+sudo chmod 600 /root/recognition.env.acceptance-backup
+printf 'ACTIVATION_SERVICE_URL=http://127.0.0.1:9\n' | \\
+  sudo tee /etc/laymatched/recognition.env >/dev/null
+sudo systemctl start laymatched-recognition-heartbeat.service || true
+sudo systemctl show laymatched-recognition-heartbeat.service \\
+  --property=ExecMainStatus,ExecMainCode,Result
 sudo stat -c '%a %n' /var/lib/laymatched/activation/heartbeat-outbox.json
 ```
 
-Expected: exit `75`, a mode-600 outbox remains, and no secret is printed.
-Restore the real Central URL by starting the scheduled service:
+Expected: `ExecMainStatus=75`, `Result=exit-code`, a mode-600 outbox remains,
+and no secret is printed. Exit `75` means delivery was deferred; it is not a
+successful systemd run. Restore the real Central URL and run recovery:
 
 ```bash
+sudo mv /root/recognition.env.acceptance-backup /etc/laymatched/recognition.env
+sudo chmod 600 /etc/laymatched/recognition.env
 sudo systemctl start laymatched-recognition-heartbeat.service
 sudo test ! -e /var/lib/laymatched/activation/heartbeat-outbox.json
+sudo systemctl show laymatched-recognition-heartbeat.service \\
+  --property=ExecMainStatus,ExecMainCode,Result
 ```
 
 Expected: queued delivery succeeds before any newly-created heartbeat, the
-same idempotency key is reused, and the outbox is removed only after success.
+same idempotency key is reused, the outbox is removed only after success, and
+`ExecMainStatus=0`, `Result=success`.
 
 ## 5. Unknown and stale reporting
 
-The central implementation uses `ACTIVATION_STALE_AFTER_SECONDS`, defaulting
+The central implementation reads `ACTIVATION_STALE_AFTER_SECONDS` and defaults
 to 900 seconds in `backend/app/config.py` at application revision
-`22ab064d6513ee1bf6c092941bd44052fddfae37`.
+`22ab064d6513ee1bf6c092941bd44052fddfae37`. Verify the effective deployed
+value rather than assuming the default:
+
+```bash
+sudo docker inspect <central-api-container> \\
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | \\
+  awk -F= '$1=="ACTIVATION_STALE_AFTER_SECONDS"{print $2}'
+```
+
+If the command prints nothing, the application default is 900 seconds. Record
+the effective value and wait that duration plus a safety margin.
 
 Send an explicit unknown status and inspect the owner recognition status using
 the approved owner access path:
@@ -127,9 +162,9 @@ sudo python3 /opt/laymatched/recognition_client.py heartbeat \\
 ```
 
 Expected: service status can be `unknown` while contact is fresh. Stop the
-timer for longer than 900 seconds, then query status again; contact must be
-`stale`, never healthy. An installation with no received heartbeat is
-`unknown`.
+timer for longer than the recorded effective threshold, then query status
+again; contact must be `stale`, never healthy. An installation with no
+received heartbeat is `unknown`.
 
 ## 6. Failure handling and cleanup
 

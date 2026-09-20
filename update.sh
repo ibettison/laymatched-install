@@ -85,7 +85,7 @@ elif [ -n "$api_status" ] || [ -n "$web_status" ]; then
     service_status=degraded
 fi
 
-exec /usr/bin/flock -n -E 75 /run/laymatched-recognition-heartbeat.lock \
+exec /usr/bin/flock -n -E 76 /run/laymatched-recognition-heartbeat.lock \
     /usr/bin/python3 /opt/laymatched/recognition_client.py heartbeat \
     --state-dir "$STATE_DIR" --central-url "$central_url" \
     --app-version "$app_version" --service-status "$service_status"
@@ -104,7 +104,6 @@ Type=oneshot
 User=root
 Group=root
 ExecStart=/opt/laymatched/recognition-heartbeat.sh
-SuccessExitStatus=0 75
 TimeoutStartSec=75
 HEARTBEAT_SERVICE_EOF
 
