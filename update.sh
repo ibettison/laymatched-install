@@ -17,6 +17,59 @@ log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+ensure_mfa_encryption_key() {
+    local env_file="$1"
+    local helper="${MFA_KEY_HELPER:-/opt/laymatched/ensure-mfa-encryption-key.sh}"
+
+    # New installations carry the shared helper. The inline fallback keeps
+    # upgrades safe for older installations that predate that helper.
+    if [ -x "$helper" ]; then
+        bash "$helper" "$env_file"
+        return
+    fi
+
+    [ -f "$env_file" ] || { echo "Environment file is missing." >&2; return 1; }
+    if grep -Eq '^[[:space:]]*export[[:space:]]+AUTH_MFA_ENCRYPTION_KEY[[:space:]]*=' "$env_file"; then
+        echo "AUTH_MFA_ENCRYPTION_KEY uses an unsupported assignment form." >&2
+        return 1
+    fi
+    local key_lines
+    local key_count=0
+    key_lines="$(grep -nE '^[[:space:]]*AUTH_MFA_ENCRYPTION_KEY[[:space:]]*=' "$env_file" || true)"
+    if [ -n "$key_lines" ]; then
+        key_count="$(printf '%s\n' "$key_lines" | wc -l | tr -d ' ')"
+    fi
+    if [ "$key_count" -gt 1 ]; then
+        echo "AUTH_MFA_ENCRYPTION_KEY is defined more than once." >&2
+        return 1
+    fi
+    if [ "$key_count" -eq 1 ]; then
+        local key
+        key="$(printf '%s\n' "$key_lines" | sed -E 's/^[0-9]+:[[:space:]]*AUTH_MFA_ENCRYPTION_KEY[[:space:]]*=[[:space:]]*//')"
+        if ! printf '%s' "$key" | grep -Eq '^[A-Za-z0-9_-]{32,}$'; then
+            echo "AUTH_MFA_ENCRYPTION_KEY is malformed." >&2
+            return 1
+        fi
+        unset key
+        chmod 600 "$env_file"
+        return 0
+    fi
+    local key
+    chmod 600 "$env_file"
+    umask 077
+    command -v openssl >/dev/null 2>&1 || {
+        echo "OpenSSL is required to generate the MFA encryption key." >&2
+        return 1
+    }
+    key="$(openssl rand -hex 32)" || {
+        echo "Could not generate MFA encryption key." >&2
+        return 1
+    }
+    printf '\nAUTH_MFA_ENCRYPTION_KEY=%s\n' "$key" >> "$env_file"
+    unset key
+    chmod 600 "$env_file"
+}
+
 # BEGIN EPHEMERAL DOCKER AUTH
 # Keep registry credentials out of the customer's normal/root Docker
 # credential store. This is intentionally self-contained for older installs
@@ -128,6 +181,9 @@ fi
 if [ ! -f /opt/laymatched/.env ]; then
     log_error "Configuration file /opt/laymatched/.env not found. Run install.sh first."
 fi
+
+ensure_mfa_encryption_key /opt/laymatched/.env || \
+    log_error "MFA encryption configuration is missing or invalid."
 
 # -- Parse version override argument --------------------------------------
 # Usage: update.sh [APPROVED_VERSION]
@@ -326,6 +382,7 @@ services:
       - AUTH_USERNAME=${AUTH_USERNAME}
       - AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
       - AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
+      - AUTH_MFA_ENCRYPTION_KEY=${AUTH_MFA_ENCRYPTION_KEY}
       - AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
       - COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY}
       - COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET}
