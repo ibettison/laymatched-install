@@ -143,15 +143,37 @@ import json, sys
 print(json.dumps({"installer_token": sys.argv[1]}))
 ' "$installer_token")
 
-    local response
-    if ! response=$(curl -fsS -X POST \
-        -H "Content-Type: application/json" \
-        -d "$json_payload" \
-        "${AUTH_API_URL}" 2>/dev/null); then
-        log_error "Failed to contact LayMatched authorization service. Check network connectivity and try again."
-    fi
+	local response response_file http_status
+	response_file=$(mktemp) || log_error "Cannot create a temporary authorization response file."
+	if ! http_status=$(curl -sS -X POST \
+		-H "Content-Type: application/json" \
+		-d "$json_payload" \
+		-o "$response_file" -w "%{http_code}" \
+		"${AUTH_API_URL}" 2>/dev/null); then
+		rm -f -- "$response_file"
+		log_error "Failed to contact LayMatched authorization service. Check network connectivity and try again."
+	fi
 
-    # Parse JSON response using python3 (available on target Ubuntu)
+	case "$http_status" in
+		200)
+			response=$(cat "$response_file")
+			rm -f -- "$response_file"
+			;;
+		401)
+			rm -f -- "$response_file"
+			log_error "Authorization service rejected the installer token (HTTP 401). Verify the token is correct, active, and not expired."
+			;;
+		4??|5??)
+			rm -f -- "$response_file"
+			log_error "Authorization service returned HTTP ${http_status}. Try again later or contact support."
+			;;
+		*)
+			rm -f -- "$response_file"
+			log_error "Authorization service returned an invalid HTTP status. Check network connectivity and try again."
+			;;
+	esac
+
+	# Parse JSON response using python3 (available on target Ubuntu)
     REGISTRY_TOKEN=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_token', ''))")
     APPROVED_VERSION=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('approved_version', ''))")
     REGISTRY_URL=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_url', ''))")
