@@ -104,6 +104,116 @@ generate_secret() {
     fi
 }
 
+install_recognition_scheduler() {
+    local config_file="/etc/laymatched/recognition.env"
+    local existing_url=""
+    local central_url="${ACTIVATION_SERVICE_URL:-}"
+
+    if [ -f "$config_file" ]; then
+        if [ "$(grep -c '^ACTIVATION_SERVICE_URL=' "$config_file" || true)" -gt 1 ]; then
+            log_error "Central recognition configuration is duplicated."
+        fi
+        existing_url=$(sed -n 's/^ACTIVATION_SERVICE_URL=//p' "$config_file")
+    fi
+    if [ -z "$central_url" ]; then
+        central_url="$existing_url"
+    fi
+    if [ -z "$central_url" ]; then
+        log_info "Central recognition scheduler not configured; local operation remains unchanged."
+        return 0
+    fi
+    case "$central_url" in
+        http://*|https://*) ;;
+        *) log_error "Central recognition URL must use http:// or https://." ;;
+    esac
+    if printf '%s' "$central_url" | grep -q '[[:space:]]'; then
+        log_error "Central recognition URL contains whitespace."
+    fi
+
+    install -d -o root -g root -m 0700 /etc/laymatched
+    local config_tmp
+    config_tmp=$(mktemp /etc/laymatched/.recognition.env.XXXXXX)
+    chmod 600 "$config_tmp"
+    printf 'ACTIVATION_SERVICE_URL=%s\n' "$central_url" > "$config_tmp"
+    mv -f "$config_tmp" "$config_file"
+    chmod 600 "$config_file"
+
+    cat > /opt/laymatched/recognition-heartbeat.sh <<'HEARTBEAT_RUNNER_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_FILE="/etc/laymatched/recognition.env"
+APP_ENV_FILE="/opt/laymatched/.env"
+STATE_DIR="/var/lib/laymatched/activation"
+
+central_url=$(sed -n 's/^ACTIVATION_SERVICE_URL=//p' "$CONFIG_FILE")
+app_version=$(sed -n 's/^APP_VERSION=//p' "$APP_ENV_FILE")
+if [ -z "$central_url" ] || [ -z "$app_version" ]; then
+    echo "recognition heartbeat configuration is incomplete" >&2
+    exit 1
+fi
+case "$central_url" in
+    http://*|https://*) ;;
+    *) echo "recognition heartbeat URL is invalid" >&2; exit 1 ;;
+esac
+if printf '%s' "$central_url" | grep -q '[[:space:]]'; then
+    echo "recognition heartbeat URL is invalid" >&2
+    exit 1
+fi
+
+api_status=$(docker inspect -f '{{.State.Health.Status}}' laymatched-api 2>/dev/null || true)
+web_status=$(docker inspect -f '{{.State.Health.Status}}' laymatched-web 2>/dev/null || true)
+service_status=unknown
+if [ "$api_status" = "healthy" ] && [ "$web_status" = "healthy" ]; then
+    service_status=healthy
+elif [ -n "$api_status" ] || [ -n "$web_status" ]; then
+    service_status=degraded
+fi
+
+exec /usr/bin/flock -n -E 75 /run/laymatched-recognition-heartbeat.lock \
+    /usr/bin/python3 /opt/laymatched/recognition_client.py heartbeat \
+    --state-dir "$STATE_DIR" --central-url "$central_url" \
+    --app-version "$app_version" --service-status "$service_status"
+HEARTBEAT_RUNNER_EOF
+    chown root:root /opt/laymatched/recognition-heartbeat.sh
+    chmod 755 /opt/laymatched/recognition-heartbeat.sh
+
+    cat > /etc/systemd/system/laymatched-recognition-heartbeat.service <<'HEARTBEAT_SERVICE_EOF'
+[Unit]
+Description=LayMatched central recognition heartbeat
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/opt/laymatched/recognition-heartbeat.sh
+SuccessExitStatus=0 75
+TimeoutStartSec=75
+HEARTBEAT_SERVICE_EOF
+
+    cat > /etc/systemd/system/laymatched-recognition-heartbeat.timer <<'HEARTBEAT_TIMER_EOF'
+[Unit]
+Description=Run LayMatched central recognition heartbeat
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+RandomizedDelaySec=30s
+Unit=laymatched-recognition-heartbeat.service
+
+[Install]
+WantedBy=timers.target
+HEARTBEAT_TIMER_EOF
+    chmod 644 /etc/systemd/system/laymatched-recognition-heartbeat.service \
+        /etc/systemd/system/laymatched-recognition-heartbeat.timer
+    systemctl daemon-reload
+    systemctl enable --now laymatched-recognition-heartbeat.timer
+    log_info "Central recognition heartbeat scheduler enabled."
+}
+
 # -- Auth API: Exchange Installer Token for registry credentials -------------
 # Calls LayMatched Auth API to validate the Installer Token and obtain the
 # approved version. Docker exchanges that token for a short-lived registry JWT.
@@ -713,6 +823,8 @@ if [ -n "$ACTIVATION_SERVICE_URL" ] && [ -n "${INSTALLER_TOKEN:-}" ]; then
         log_warn "Central recognition unavailable; local LayMatched operation is unchanged. Retry recognition after connectivity is restored."
     fi
 fi
+
+install_recognition_scheduler
 
 # -- Post-health persistence (rerun only) -----------------------------------
 if [ "${CONFIG_ALREADY_PROVIDED}" = "true" ]; then
