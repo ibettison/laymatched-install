@@ -42,4 +42,11 @@ class LocalActivationTests(unittest.TestCase):
         self.assertEqual(install_script.count(mount), 2)
         self.assertNotIn("/var/lib/laymatched/activation:/var/lib/laymatched/activation:ro", install_script)
 
+    def test_installer_delivers_offline_safe_recognition_client_without_forwarding_credential(self):
+        install_script = (Path(__file__).parents[1] / "install.sh").read_text()
+        self.assertIn('recognition_client.py" /opt/laymatched/recognition_client.py', install_script)
+        self.assertIn('printf \'%s\' "$INSTALLER_TOKEN"', install_script)
+        self.assertIn('ACTIVATION_ASSERTION_URL', install_script)
+        self.assertNotIn('central-url "$INSTALLER_TOKEN"', install_script)
+
 if __name__ == "__main__": unittest.main()

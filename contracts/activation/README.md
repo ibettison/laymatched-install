@@ -1,6 +1,22 @@
 # LayMatched Activation Contract
 
-> **STATUS: SLICE 0 CONTRACT — RUNTIME IMPLEMENTATION AND DEPLOYMENT NOT AUTHORISED**
+## Recognition slice
+
+The installer credential remains an Auth API credential. The Auth API validates
+it and resolves the canonical customer/licence identity at its internal
+`/activation/assertions` bridge; it returns a short-lived, audience-restricted
+assertion to the installer. The installer sends that assertion to the central
+`POST /v1/activations` endpoint, never the original credential. Central then
+binds the installation's Ed25519 public key and issues a short-lived activation
+session. Heartbeats use that session plus the registered installation signature.
+
+`POST /v1/activations/{activation_id}/heartbeat` records only installation ID,
+application version and the explicit service status. The server supplies
+`received_at`. A missing or overdue heartbeat is `unknown`/`stale`, not healthy.
+No bets, odds, stakes, balances, bookmaker details, passwords, tokens or MFA
+secrets are part of this slice.
+
+> **STATUS: RECOGNITION SLICE — IMPLEMENTED LOCALLY; DEPLOYMENT NOT AUTHORISED**
 
 This directory is the authoritative shared integration boundary for customer
 activation. It does not contain a licensing backend, onboarding frontend, DNS

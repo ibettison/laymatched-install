@@ -15,6 +15,7 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ACTIVATION_STATE_DIR="/var/lib/laymatched/activation"
 INSTALLATION_ID_FILE="/etc/laymatched/installation-id"
+ACTIVATION_SERVICE_URL="${ACTIVATION_SERVICE_URL:-}"
 
 log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
@@ -330,6 +331,7 @@ fi
 INSTALLATION_ID=$(tr -d '\r\n' < "$INSTALLATION_ID_FILE")
 python3 "$SCRIPT_DIR/tools/local_activation.py" --state-dir "$ACTIVATION_STATE_DIR" init "$INSTALLATION_ID" > /dev/null
 install -o root -g root -m 0755 "$SCRIPT_DIR/tools/local_activation.py" /opt/laymatched/local_activation.py
+install -o root -g root -m 0755 "$SCRIPT_DIR/tools/recognition_client.py" /opt/laymatched/recognition_client.py
 log_info "Local activation state initialized for resumable installation."
 
 # -- Safe rerun: skip config if already provided ---------------------------
@@ -698,6 +700,18 @@ else
         rm -f /opt/laymatched/.env.candidate
     fi
     log_error "Health check timeout reached after $MAX_WAIT seconds. LayMatched Web is not responding. Check container logs with: docker logs -f laymatched-web"
+fi
+
+# Optional central recognition is deliberately offline-safe. The installer
+# credential is piped to the Auth API assertion bridge and is never sent to
+# the central application or persisted. No central URL means local operation
+# remains unchanged.
+if [ -n "$ACTIVATION_SERVICE_URL" ] && [ -n "${INSTALLER_TOKEN:-}" ]; then
+    ACTIVATION_ASSERTION_URL="${AUTH_API_URL%/installer/authorize}/activation/assertions"
+    if ! printf '%s' "$INSTALLER_TOKEN" | python3 /opt/laymatched/recognition_client.py bootstrap \
+        --auth-url "$ACTIVATION_ASSERTION_URL" --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION"; then
+        log_warn "Central recognition unavailable; local LayMatched operation is unchanged. Retry recognition after connectivity is restored."
+    fi
 fi
 
 # -- Post-health persistence (rerun only) -----------------------------------
