@@ -21,6 +21,12 @@ except ModuleNotFoundError:
     from local_activation import KeyService
 
 
+class RecognitionHTTPError(RuntimeError):
+    def __init__(self, status: int):
+        super().__init__(f"central recognition request failed with HTTP {status}")
+        self.status = status
+
+
 def _b64(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
@@ -28,8 +34,11 @@ def _b64(value: bytes) -> str:
 def _post(url: str, body: dict, headers: dict[str, str], timeout: int = 15) -> dict:
     encoded = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
     request = urllib.request.Request(url, data=encoded, headers={**headers, "Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        value = json.loads(response.read())
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            value = json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        raise RecognitionHTTPError(error.code) from error
     if not isinstance(value, dict):
         raise RuntimeError("central recognition returned an invalid response")
     return value
@@ -92,6 +101,42 @@ def _canonical_signature(directory: Path, method: str, path: str, body: bytes, t
     return _b64(KeyService(directory).sign(message))
 
 
+def _signed_request_headers(directory: Path, *, installation_id: str, path: str, body: bytes, idempotency_key: str,
+                            access_token: str | None = None) -> dict[str, str]:
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    nonce = uuid.uuid4().hex
+    headers = {"X-Installation-Id": installation_id, "X-Signature-Timestamp": timestamp,
+               "X-Signature-Nonce": nonce,
+               "X-Installation-Signature": _canonical_signature(directory, "POST", path, body, timestamp, nonce),
+               "Idempotency-Key": idempotency_key}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    return headers
+
+
+def _resume_session(args, directory: Path, session: dict) -> dict:
+    body = {"activation_id": session["activation_id"]}
+    path = "/v1/activation-sessions"
+    encoded = json.dumps(body, separators=(",", ":"), sort_keys=True).encode()
+    response = _post(f"{args.central_url.rstrip('/')}{path}", body,
+                     _signed_request_headers(directory, installation_id=json.loads((directory / "state.json").read_text())["installation_id"],
+                                             path=path, body=encoded, idempotency_key=str(uuid.uuid4())))
+    refreshed = {"activation_id": response["activation_id"], "access_token": response["access_token"],
+                 "expires_at": int(time.time()) + int(response["expires_in"])}
+    _write_json(directory / "session.json", refreshed)
+    return refreshed
+
+
+def _ensure_session(args, directory: Path, session: dict) -> dict:
+    try:
+        expires_at = int(session.get("expires_at", 0))
+    except (TypeError, ValueError):
+        expires_at = 0
+    if expires_at <= int(time.time()) + 60:
+        return _resume_session(args, directory, session)
+    return session
+
+
 def heartbeat(args) -> int:
     directory = Path(args.state_dir)
     state = json.loads((directory / "state.json").read_text())
@@ -100,22 +145,41 @@ def heartbeat(args) -> int:
     queued = _read_json(pending_path, [])
     body = {"installation_id": state["installation_id"], "app_version": args.app_version, "service_status": args.service_status}
     queued.append({"body": body, "idempotency_key": str(uuid.uuid4())})
-    for item in queued:
+    # The new item is durable before any session renewal or network delivery.
+    _write_json(pending_path, queued)
+    while queued:
+        item = queued[0]
+        try:
+            session = _ensure_session(args, directory, session)
+        except (OSError, urllib.error.URLError, RecognitionHTTPError, RuntimeError, ValueError, KeyError):
+            return 75
         encoded = json.dumps(item["body"], separators=(",", ":"), sort_keys=True).encode()
-        timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        nonce = uuid.uuid4().hex
         path = f"/v1/activations/{session['activation_id']}/heartbeat"
-        headers = {"Authorization": f"Bearer {session['access_token']}", "X-Installation-Id": state["installation_id"],
-                   "X-Signature-Timestamp": timestamp, "X-Signature-Nonce": nonce,
-                   "X-Installation-Signature": _canonical_signature(directory, "POST", path, encoded, timestamp, nonce),
-                   "Idempotency-Key": item["idempotency_key"]}
+        headers = _signed_request_headers(directory, installation_id=state["installation_id"], path=path,
+                                          body=encoded, idempotency_key=item["idempotency_key"],
+                                          access_token=session["access_token"])
         try:
             _post(f"{args.central_url.rstrip('/')}{path}", item["body"], headers)
-        except (OSError, urllib.error.URLError, RuntimeError) as error:
-            _write_json(pending_path, queued[queued.index(item):])
+        except RecognitionHTTPError as error:
+            if error.status != 401:
+                return 75
+            try:
+                session = _resume_session(args, directory, session)
+                retry_headers = _signed_request_headers(
+                    directory, installation_id=state["installation_id"], path=path, body=encoded,
+                    idempotency_key=item["idempotency_key"], access_token=session["access_token"],
+                )
+                _post(f"{args.central_url.rstrip('/')}{path}", item["body"], retry_headers)
+            except (OSError, urllib.error.URLError, RecognitionHTTPError, RuntimeError, ValueError, KeyError):
+                return 75
+        except (OSError, urllib.error.URLError, RuntimeError):
             print(f"central recognition unavailable; heartbeat retained for retry", file=sys.stderr)
             return 75
-    pending_path.unlink(missing_ok=True)
+        queued.pop(0)
+        if queued:
+            _write_json(pending_path, queued)
+        else:
+            pending_path.unlink(missing_ok=True)
     return 0
 
 
