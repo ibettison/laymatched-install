@@ -17,6 +17,169 @@ log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+CANDIDATE_ENV_FILE=""
+CANDIDATE_COMPOSE_FILE=""
+CANDIDATE_RESTART_ATTEMPTED=0
+PERSISTENT_COMPOSE_FILE="/opt/laymatched/docker-compose.yml"
+RECOVERY_STATE_FILE="/opt/laymatched/.update-recovery"
+PRESERVE_RECOVERY_ARTIFACTS=0
+RECOVERY_REASON=""
+
+ensure_mfa_encryption_key() {
+    local env_file="$1"
+    local helper="${MFA_KEY_HELPER:-/opt/laymatched/ensure-mfa-encryption-key.sh}"
+
+    # New installations carry the shared helper. The inline fallback keeps
+    # upgrades safe for older installations that predate that helper.
+    if [ -x "$helper" ]; then
+        bash "$helper" "$env_file"
+        return
+    fi
+
+    [ -f "$env_file" ] || { echo "Environment file is missing." >&2; return 1; }
+    if grep -Eq '^[[:space:]]*export[[:space:]]+AUTH_MFA_ENCRYPTION_KEY[[:space:]]*=' "$env_file"; then
+        echo "AUTH_MFA_ENCRYPTION_KEY uses an unsupported assignment form." >&2
+        return 1
+    fi
+    local key_lines
+    local key_count=0
+    key_lines="$(grep -nE '^[[:space:]]*AUTH_MFA_ENCRYPTION_KEY[[:space:]]*=' "$env_file" || true)"
+    if [ -n "$key_lines" ]; then
+        key_count="$(printf '%s\n' "$key_lines" | wc -l | tr -d ' ')"
+    fi
+    if [ "$key_count" -gt 1 ]; then
+        echo "AUTH_MFA_ENCRYPTION_KEY is defined more than once." >&2
+        return 1
+    fi
+    if [ "$key_count" -eq 1 ]; then
+        local key
+        key="$(printf '%s\n' "$key_lines" | sed -E 's/^[0-9]+:[[:space:]]*AUTH_MFA_ENCRYPTION_KEY[[:space:]]*=[[:space:]]*//')"
+        if ! printf '%s' "$key" | grep -Eq '^[A-Za-z0-9_-]{32,}$'; then
+            echo "AUTH_MFA_ENCRYPTION_KEY is malformed." >&2
+            return 1
+        fi
+        unset key
+        chmod 600 "$env_file"
+        return 0
+    fi
+    local key
+    chmod 600 "$env_file"
+    umask 077
+    command -v openssl >/dev/null 2>&1 || {
+        echo "OpenSSL is required to generate the MFA encryption key." >&2
+        return 1
+    }
+    key="$(openssl rand -hex 32)" || {
+        echo "Could not generate MFA encryption key." >&2
+        return 1
+    }
+    printf '\nAUTH_MFA_ENCRYPTION_KEY=%s\n' "$key" >> "$env_file"
+    unset key
+    chmod 600 "$env_file"
+}
+
+prepare_candidate_compose() {
+    local source_file="$1"
+    local destination_file="$2"
+
+    python3 - "$source_file" "$destination_file" <<'PY'
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+lines = source.read_text().splitlines(keepends=True)
+
+service_start = next((index for index, line in enumerate(lines) if line == "  api:\n"), None)
+if service_start is None:
+    raise SystemExit("Candidate Compose file has no api service.")
+
+service_end = len(lines)
+for index in range(service_start + 1, len(lines)):
+    if re.match(r"^  [^ \n].*:\s*$", lines[index]):
+        service_end = index
+        break
+
+api_lines = lines[service_start:service_end]
+if any("AUTH_MFA_ENCRYPTION_KEY" in line for line in api_lines):
+    rendered = lines
+else:
+    environment_index = next(
+        (index for index, line in enumerate(api_lines) if line == "    environment:\n"),
+        None,
+    )
+    if environment_index is None:
+        raise SystemExit("API service has no environment block.")
+
+    insert_at = environment_index + 1
+    while insert_at < len(api_lines):
+        line = api_lines[insert_at]
+        if line.strip() and not line.startswith("      "):
+            break
+        insert_at += 1
+
+    existing_environment_lines = [
+        line for line in api_lines[environment_index + 1:insert_at] if line.strip()
+    ]
+    mapping_style = existing_environment_lines and not existing_environment_lines[0].lstrip().startswith("-")
+    entry = (
+        "      AUTH_MFA_ENCRYPTION_KEY: ${AUTH_MFA_ENCRYPTION_KEY}\n"
+        if mapping_style
+        else "      - AUTH_MFA_ENCRYPTION_KEY=${AUTH_MFA_ENCRYPTION_KEY}\n"
+    )
+    rendered = lines[: service_start + insert_at] + [entry] + lines[service_start + insert_at:]
+
+destination.parent.mkdir(parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile("w", dir=destination.parent, delete=False) as temporary:
+    temporary.writelines(rendered)
+    temporary_path = Path(temporary.name)
+os.chmod(temporary_path, 0o600)
+os.replace(temporary_path, destination)
+PY
+}
+
+write_recovery_state() {
+    if [ -z "${CANDIDATE_ENV_FILE:-}" ] || [ -z "${CANDIDATE_COMPOSE_FILE:-}" ]; then
+        return 0
+    fi
+    if [ ! -f "$CANDIDATE_ENV_FILE" ] && [ ! -f "$CANDIDATE_COMPOSE_FILE" ]; then
+        return 0
+    fi
+    cat > "$RECOVERY_STATE_FILE" <<EOF
+status=manual_recovery_required
+reason=${RECOVERY_REASON:-candidate_deployment_failed}
+previous_compose=${PERSISTENT_COMPOSE_FILE}
+candidate_env=${CANDIDATE_ENV_FILE}
+candidate_compose=${CANDIDATE_COMPOSE_FILE}
+old_version=${CURRENT_APP_VERSION:-unknown}
+candidate_version=${CANDIDATE_VERSION:-unknown}
+database_rollback=not_attempted
+automatic_container_restore=not_safe_without_migration_policy_and_snapshot
+next_action=review_database_migration_state_and_pre_update_snapshot_before_restarting_any_previous_application_image
+EOF
+    chmod 600 "$RECOVERY_STATE_FILE"
+}
+
+handle_candidate_failure() {
+    local reason="$1"
+    PRESERVE_RECOVERY_ARTIFACTS=1
+    RECOVERY_REASON="$reason"
+    if [ "${CANDIDATE_RESTART_ATTEMPTED:-0}" = 1 ] \
+        && [ -f "${CANDIDATE_ENV_FILE:-}" ] \
+        && [ -f "${CANDIDATE_COMPOSE_FILE:-}" ]; then
+        # A pull failure has not started a candidate and must not stop the
+        # existing installation. After a restart attempt, stop only the
+        # application services that may be candidate containers; leave the
+        # database service and volume available for diagnosis/recovery.
+        docker compose --env-file "$CANDIDATE_ENV_FILE" -f "$CANDIDATE_COMPOSE_FILE" \
+            stop api web >/dev/null 2>&1 || true
+    fi
+    write_recovery_state
+}
+
 # BEGIN EPHEMERAL DOCKER AUTH
 # Keep registry credentials out of the customer's normal/root Docker
 # credential store. This is intentionally self-contained for older installs
@@ -24,6 +187,18 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 EPHEMERAL_DOCKER_CONFIG_DIR=""
 
 cleanup_ephemeral_docker_auth() {
+    if [ "${PRESERVE_RECOVERY_ARTIFACTS:-0}" = 1 ]; then
+        write_recovery_state
+    else
+        if [ -n "${CANDIDATE_ENV_FILE:-}" ]; then
+            rm -f -- "$CANDIDATE_ENV_FILE" || true
+            CANDIDATE_ENV_FILE=""
+        fi
+        if [ -n "${CANDIDATE_COMPOSE_FILE:-}" ]; then
+            rm -f -- "$CANDIDATE_COMPOSE_FILE" || true
+            CANDIDATE_COMPOSE_FILE=""
+        fi
+    fi
     local config_dir="${EPHEMERAL_DOCKER_CONFIG_DIR:-}"
     if [ -z "$config_dir" ]; then
         return 0
@@ -129,6 +304,9 @@ if [ ! -f /opt/laymatched/.env ]; then
     log_error "Configuration file /opt/laymatched/.env not found. Run install.sh first."
 fi
 
+ensure_mfa_encryption_key /opt/laymatched/.env || \
+    log_error "MFA encryption configuration is missing or invalid."
+
 # -- Parse version override argument --------------------------------------
 # Usage: update.sh [APPROVED_VERSION]
 # An optional version is accepted only when it matches the version returned by
@@ -212,6 +390,10 @@ log_info "Phase 3: Preparing candidate deployment environment..."
 # Create candidate .env by copying persistent .env and updating candidate values
 cd /opt/laymatched
 cp .env .env.candidate
+CANDIDATE_ENV_FILE="/opt/laymatched/.env.candidate"
+CANDIDATE_COMPOSE_FILE="/opt/laymatched/docker-compose.candidate.yml"
+PRESERVE_RECOVERY_ARTIFACTS=1
+RECOVERY_REASON="candidate_deployment_failed"
 # Update candidate APP_VERSION
 sed -i "s/^APP_VERSION=.*/APP_VERSION=${CANDIDATE_VERSION}/" .env.candidate
 # Handle REGISTRY_URL: replace if exists, append if missing (legacy .env migration)
@@ -221,18 +403,31 @@ else
     echo "REGISTRY_URL=${CANDIDATE_REGISTRY_URL}" >> .env.candidate
 fi
 
+# Keep the persistent Compose file unchanged until the candidate is healthy.
+# Legacy files may lack the MFA API mapping, so prepare an ephemeral candidate
+# file for the first restart instead of deploying from the old template.
+prepare_candidate_compose docker-compose.yml "$CANDIDATE_COMPOSE_FILE"
+
 # -- Phase 4: Pull candidate LayMatched images -----------------------------
 
 log_info "Phase 4: Pulling candidate LayMatched release (${CANDIDATE_VERSION})..."
 
-# Use candidate .env for Compose variable interpolation
-docker compose --env-file .env.candidate pull
+# Use the candidate environment and candidate Compose file for interpolation
+# and the first candidate restart. The persistent Compose file is unchanged.
+if ! docker compose --env-file .env.candidate -f "$CANDIDATE_COMPOSE_FILE" pull; then
+    handle_candidate_failure "candidate_pull_failed"
+    log_error "Candidate image pull failed. Candidate artifacts were retained; automatic rollback was not attempted. Review $RECOVERY_STATE_FILE before recovery."
+fi
 
 # -- Phase 5: Restart services with candidate version ----------------------
 
 log_info "Phase 5: Restarting services with candidate release..."
 
-docker compose --env-file .env.candidate up -d
+CANDIDATE_RESTART_ATTEMPTED=1
+if ! docker compose --env-file .env.candidate -f "$CANDIDATE_COMPOSE_FILE" up -d; then
+    handle_candidate_failure "candidate_restart_failed"
+    log_error "Candidate restart failed. Candidate artifacts were retained; automatic rollback was not attempted. Review $RECOVERY_STATE_FILE before recovery."
+fi
 cd - > /dev/null
 
 # -- Phase 6: Health checks ----------------------------------------------
@@ -259,9 +454,8 @@ done
 # -- Phase 7: Status - fail clearly if unhealthy -------------------------
 
 if [ $ELAPSED -ge $MAX_WAIT ]; then
-    # Clean up candidate env on failure
-    rm -f /opt/laymatched/.env.candidate
-    log_error "Health check timeout reached after $MAX_WAIT seconds. ${APP_NAME} is not responding. Update failed. Check container logs with: docker logs -f ${APP_NAME}"
+    handle_candidate_failure "candidate_health_check_timeout"
+    log_error "Candidate health gate failed. Candidate containers were stopped; automatic rollback was not attempted because migration compatibility and a pre-update database snapshot were not available. Review $RECOVERY_STATE_FILE before restarting any previous application image."
 fi
 
 # -- Phase 8: Candidate healthy - persist new version and regenerate Compose --
@@ -326,6 +520,7 @@ services:
       - AUTH_USERNAME=${AUTH_USERNAME}
       - AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
       - AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
+      - AUTH_MFA_ENCRYPTION_KEY=${AUTH_MFA_ENCRYPTION_KEY}
       - AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
       - COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY}
       - COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET}
@@ -367,8 +562,17 @@ networks:
     driver: bridge
 COMPOSE_EOF
 
+# The candidate is now healthy and the persistent Compose file has been
+# regenerated for the promoted release. Recovery artifacts are no longer
+# needed on the successful path.
+rm -f "$RECOVERY_STATE_FILE"
+PRESERVE_RECOVERY_ARTIFACTS=0
+
 # Clean up candidate env file
 rm -f .env.candidate
+CANDIDATE_ENV_FILE=""
+rm -f "$CANDIDATE_COMPOSE_FILE"
+CANDIDATE_COMPOSE_FILE=""
 
 cd - > /dev/null
 

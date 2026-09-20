@@ -315,6 +315,11 @@ chown root:root /opt/laymatched
 
 log_info "/opt/laymatched created."
 
+# Keep the MFA key helper with the installation so future reruns can validate
+# the durable setting without regenerating it.
+install -o root -g root -m 0755 "$SCRIPT_DIR/scripts/ensure-mfa-encryption-key.sh" \
+    /opt/laymatched/ensure-mfa-encryption-key.sh
+
 # Create the durable local installation identity once. The installer token is
 # deliberately not passed to or retained by this service.
 install -d -o root -g root -m 0700 /etc/laymatched "$ACTIVATION_STATE_DIR"
@@ -333,6 +338,8 @@ CONFIG_ALREADY_PROVIDED=false
 if [ -f /opt/laymatched/.env ]; then
     log_info "Configuration already present in /opt/laymatched/.env - skipping interactive prompts."
     CONFIG_ALREADY_PROVIDED=true
+    bash "$SCRIPT_DIR/scripts/ensure-mfa-encryption-key.sh" /opt/laymatched/.env || \
+        log_error "MFA encryption configuration is missing or invalid."
     # Load only APP_VERSION from .env safely (without expanding $$ in AUTH_PASSWORD_HASH)
     # Use a safe parser that doesn't evaluate shell expansions
     APP_VERSION=$(grep '^APP_VERSION=' /opt/laymatched/.env | cut -d'=' -f2-)
@@ -413,6 +420,8 @@ AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
 COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY}
 COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET}
 EOF
+    bash "$SCRIPT_DIR/scripts/ensure-mfa-encryption-key.sh" /opt/laymatched/.env || \
+        log_error "MFA encryption configuration could not be created."
     chmod 600 /opt/laymatched/.env
     chown root:root /opt/laymatched/.env
 
@@ -506,6 +515,7 @@ services:
       - AUTH_USERNAME=${AUTH_USERNAME}
       - AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
       - AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
+      - AUTH_MFA_ENCRYPTION_KEY=${AUTH_MFA_ENCRYPTION_KEY}
       - AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
       - COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY}
       - COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET}
@@ -752,6 +762,7 @@ services:
       - AUTH_USERNAME=${AUTH_USERNAME}
       - AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
       - AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
+      - AUTH_MFA_ENCRYPTION_KEY=${AUTH_MFA_ENCRYPTION_KEY}
       - AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
       - COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY}
       - COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET}
