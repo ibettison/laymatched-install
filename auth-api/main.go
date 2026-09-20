@@ -96,6 +96,17 @@ type AuthorizeResponse struct {
 	RegistryURL     string `json:"registry_url"`
 }
 
+type ActivationAssertionRequest struct {
+	InstallationID        string `json:"installation_id" binding:"required"`
+	InstallationPublicKey string `json:"installation_public_key" binding:"required"`
+	AppVersion            string `json:"app_version" binding:"required"`
+}
+
+type ActivationAssertionResponse struct {
+	Assertion string `json:"assertion"`
+	ExpiresIn int    `json:"expires_in"`
+}
+
 type HealthResponse struct {
 	Status    string `json:"status"`
 	Version   string `json:"version"`
@@ -589,6 +600,23 @@ func generateRegistryToken(customerID string, scopes string, ttl time.Duration) 
 	return token.SignedString(privateKey)
 }
 
+func generateActivationAssertion(customerID string, req ActivationAssertionRequest, ttl time.Duration) (string, error) {
+	now := time.Now().UTC()
+	claims := jwt.MapClaims{
+		"iss":                     issuer,
+		"aud":                     "laymatched-activation",
+		"sub":                     customerID,
+		"customer_id":             customerID,
+		"installation_id":         req.InstallationID,
+		"installation_public_key": req.InstallationPublicKey,
+		"app_version":             req.AppVersion,
+		"iat":                     now.Unix(),
+		"exp":                     now.Add(ttl).Unix(),
+		"jti":                     fmt.Sprintf("activation-%d-%s", now.UnixNano(), req.InstallationID),
+	}
+	return jwt.NewWithClaims(jwt.SigningMethodRS256, claims).SignedString(privateKey)
+}
+
 func findInstallerTokenByHash(hash string) (*InstallerToken, error) {
 	row := db.QueryRow(`
 		SELECT id, customer_id, token_sha256, token_hash, created_at, revoked_at, expires_at, notes, last_used_at
@@ -742,6 +770,44 @@ func authorizeHandler(c *gin.Context) {
 
 	logRequest(c, http.StatusOK, tokenPrefix, "authorization successful")
 	c.JSON(http.StatusOK, resp)
+}
+
+func activationAssertionHandler(c *gin.Context) {
+	var req ActivationAssertionRequest
+	if err := c.ShouldBindJSON(&req); err != nil || !regexp.MustCompile(`^[0-9a-fA-F-]{36}$`).MatchString(req.InstallationID) || len(req.InstallationPublicKey) < 32 || len(req.InstallationPublicKey) > 128 || !approvedVersionPattern.MatchString(req.AppVersion) {
+		logError(c, http.StatusBadRequest, "-", "invalid activation assertion request")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	authHeader := c.GetHeader("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+	installerToken := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+	tokenPrefix := redactToken(installerToken)
+	t, err := findInstallerTokenByHash(tokenSHA256(installerToken))
+	if err != nil {
+		logError(c, http.StatusInternalServerError, tokenPrefix, "activation assertion database error")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	if t == nil || !verifyTokenHash(installerToken, t.TokenHash) || isTokenValid(t.RevokedAt, t.ExpiresAt) != nil {
+		logRequest(c, http.StatusUnauthorized, tokenPrefix, "invalid activation assertion credential")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+	assertion, err := generateActivationAssertion(t.CustomerID, req, 10*time.Minute)
+	if err != nil {
+		logError(c, http.StatusInternalServerError, tokenPrefix, "activation assertion generation failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	if err := updateInstallerTokenLastUsed(t.ID); err != nil {
+		log.Printf(`{"level":"warn","message":"failed to update last_used_at","token_id":%d}`, t.ID)
+	}
+	logRequest(c, http.StatusOK, tokenPrefix, "activation assertion issued")
+	c.JSON(http.StatusOK, ActivationAssertionResponse{Assertion: assertion, ExpiresIn: 600})
 }
 
 func tokenServiceHandler(c *gin.Context) {
@@ -982,6 +1048,7 @@ func setupRouter() *gin.Engine {
 
 	api := r.Group("/installer")
 	api.POST("/authorize", authorizeHandler)
+	r.POST("/activation/assertions", activationAssertionHandler)
 
 	tokenSvc := r.Group("/token")
 	tokenSvc.GET("", tokenServiceHandler)

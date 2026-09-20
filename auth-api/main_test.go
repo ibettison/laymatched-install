@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -213,6 +214,40 @@ func TestAuthorizeValidToken(t *testing.T) {
 	// registry_token should be the installer token itself (for use with /token endpoint)
 	if resp.RegistryToken != token {
 		t.Errorf("Expected registry_token to be installer token, got %s", resp.RegistryToken)
+	}
+}
+
+func TestActivationAssertionValidatesInstallerAndResolvesCustomer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testDB, cleanup := setupTestDB(t)
+	defer cleanup()
+	priv, pub := generateTestKeys(t)
+	privateKey, publicKey = priv, pub
+	cfg = Config{RegistryURL: "registry.matched.laysports.co.uk", RateLimitPerMin: 1000}
+	db = testDB
+	token := "lm_inst_activationtoken123456789"
+	insertTestToken(t, testDB, "customer-42", token, false, false)
+	router := setupRouter()
+	body := `{"installation_id":"11111111-1111-4111-8111-111111111111","installation_public_key":"` + strings.Repeat("A", 43) + `","app_version":"v1.2.3"}`
+	req := httptest.NewRequest("POST", "/activation/assertions", bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response ActivationAssertionResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil || response.Assertion == "" {
+		t.Fatalf("Expected assertion response: %v", err)
+	}
+	parsed, err := jwt.Parse(response.Assertion, func(token *jwt.Token) (interface{}, error) { return pub, nil })
+	if err != nil || !parsed.Valid {
+		t.Fatalf("Assertion did not validate: %v", err)
+	}
+	claims := parsed.Claims.(jwt.MapClaims)
+	if claims["customer_id"] != "customer-42" || claims["aud"] != "laymatched-activation" {
+		t.Fatalf("Unexpected assertion claims: %#v", claims)
 	}
 }
 

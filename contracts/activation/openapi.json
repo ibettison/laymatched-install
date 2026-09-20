@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "LayMatched Customer Activation API",
-    "version": "1.1.0-slice0",
-    "description": "Authoritative activation integration contract. This provider-neutral contract defines interfaces only; it does not implement licensing, DNS, HTTPS provisioning, onboarding, or MFA."
+    "version": "1.2.0-recognition",
+    "description": "Authoritative activation integration contract for authenticated installation recognition and activation state. Installer credentials remain at the Auth API and are never forwarded to the central application."
   },
   "servers": [
     {
@@ -24,11 +24,11 @@
     "/v1/activations": {
       "post": {
         "operationId": "bootstrapActivation",
-        "summary": "Create or resume an activation from an installer credential",
-        "description": "The installer credential is supplied only by the local installer/backend. It must never be exposed to browser JavaScript. Customer identity is resolved exclusively from this credential, not from profile fields.",
+        "summary": "Create or resume an activation from an Auth API assertion",
+        "description": "The Auth API validates the installer credential and resolves customer identity before issuing this short-lived assertion. The installer credential is never forwarded to the central application or exposed to browser JavaScript.",
         "tags": ["Activation"],
         "security": [
-          { "InstallerCredential": [] }
+          { "ActivationAssertion": [] }
         ],
         "parameters": [
           { "$ref": "#/components/parameters/IdempotencyKey" }
@@ -89,6 +89,37 @@
           "422": { "$ref": "#/components/responses/ValidationError" },
           "429": { "$ref": "#/components/responses/RateLimited" },
           "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/activations/{activation_id}/heartbeat": {
+      "post": {
+        "operationId": "recordActivationHeartbeat",
+        "summary": "Record an authenticated installation heartbeat",
+        "description": "Only installation ID, application version and explicit service status are recorded; the server supplies received_at. Missing or overdue contact is unknown or stale, never healthy.",
+        "tags": ["Activation heartbeat"],
+        "security": [ { "ActivationToken": [], "InstallationIdentity": [], "InstallationSignature": [] } ],
+        "parameters": [
+          { "$ref": "#/components/parameters/ActivationId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/InstallationId" },
+          { "$ref": "#/components/parameters/SignatureTimestamp" },
+          { "$ref": "#/components/parameters/SignatureNonce" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HeartbeatRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Heartbeat accepted or safely replayed",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HeartbeatResponse" } } }
+          },
+          "401": { "$ref": "#/components/responses/InvalidCredential" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
         }
       }
     },
@@ -669,6 +700,12 @@
         "bearerFormat": "opaque installer credential",
         "description": "Bootstrap credential used only by the installer or local backend; never exposed to browser JavaScript."
       },
+      "ActivationAssertion": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Short-lived Auth API assertion containing the already-resolved customer/licence identity. It is accepted only by the central activation service and never contains the installer credential."
+      },
       "ActivationToken": {
         "type": "http",
         "scheme": "bearer",
@@ -901,6 +938,29 @@
           "status": { "$ref": "#/components/schemas/ActivationState" },
           "next_action": { "$ref": "#/components/schemas/NextAction" },
           "server_time": { "type": "string", "format": "date-time" }
+        }
+      },
+      "HeartbeatRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["installation_id", "app_version", "service_status"],
+        "properties": {
+          "installation_id": { "type": "string", "format": "uuid" },
+          "app_version": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:[._-][0-9A-Za-z.-]+)?$" },
+          "service_status": { "type": "string", "enum": ["healthy", "degraded", "unknown"] }
+        }
+      },
+      "HeartbeatResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["activation_id", "installation_id", "app_version", "service_status", "received_at", "contact_state"],
+        "properties": {
+          "activation_id": { "type": "string", "format": "uuid" },
+          "installation_id": { "type": "string", "format": "uuid" },
+          "app_version": { "type": "string" },
+          "service_status": { "type": "string", "enum": ["healthy", "degraded", "unknown"] },
+          "received_at": { "type": "string", "format": "date-time" },
+          "contact_state": { "type": "string", "enum": ["fresh", "stale", "unknown"] }
         }
       },
       "Membership": {

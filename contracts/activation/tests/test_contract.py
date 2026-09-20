@@ -209,7 +209,7 @@ class ActivationContractTests(unittest.TestCase):
     def test_bootstrap_is_the_only_installer_credential_operation(self):
         installer_operations = []
         for path, method, operation in self.operations():
-            if any("InstallerCredential" in requirement for requirement in operation["security"]):
+            if any("ActivationAssertion" in requirement for requirement in operation["security"]):
                 installer_operations.append((path, method))
         self.assertEqual([("/v1/activations", "post")], installer_operations)
 
@@ -229,9 +229,9 @@ class ActivationContractTests(unittest.TestCase):
                 self.assertNotIn("InstallerCredential", operation["security"][0])
                 self.assertNotIn("ActivationToken", operation["security"][0])
                 continue
-            self.assertIn(
-                {"ActivationToken": [], "InstallationSignature": []},
-                operation["security"],
+            self.assertTrue(
+                any({"ActivationToken": [], "InstallationSignature": []}.items() <= requirement.items()
+                    for requirement in operation["security"]),
                 f"{method.upper()} {path}",
             )
             names = self.parameter_names(operation)
