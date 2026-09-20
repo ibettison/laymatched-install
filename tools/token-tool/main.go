@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"errors"
@@ -67,10 +68,8 @@ func hashToken(token string) (string, error) {
 }
 
 func tokenSHA256(token string) string {
-	// This is a simplified version - in reality we'd need crypto/sha256
-	// But for the CLI tool we just store the bcrypt hash and compute sha256 in the API
-	// The tool only needs to generate the token and bcrypt hash
-	return ""
+	sum := sha256.Sum256([]byte(token))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func issueInstallerToken(customerID, notes string, expiresInDays int) error {
@@ -81,31 +80,8 @@ func issueInstallerToken(customerID, notes string, expiresInDays int) error {
 	}
 	defer db.Close()
 
-	token, err := generateToken(tokenPrefix)
+	token, expiresAt, err := issueInstallerTokenWithDB(db, customerID, notes, expiresInDays)
 	if err != nil {
-		return err
-	}
-
-	hash, err := hashToken(token)
-	if err != nil {
-		return err
-	}
-
-	var expiresAt *time.Time
-	if expiresInDays > 0 {
-		t := time.Now().AddDate(0, 0, expiresInDays)
-		expiresAt = &t
-	}
-
-	_, err = db.Exec(`
-		INSERT INTO installer_tokens (customer_id, token_hash, expires_at, notes)
-		VALUES (?, ?, ?, ?)
-	`, customerID, hash, expiresAt, notes)
-	if err != nil {
-		var sqliteErr sqlite3.Error
-		if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
-			return fmt.Errorf("token collision (extremely unlikely), please try again")
-		}
 		return err
 	}
 
@@ -121,9 +97,41 @@ func issueInstallerToken(customerID, notes string, expiresInDays int) error {
 	fmt.Printf("Notes:       %s\n", notes)
 	fmt.Println()
 	fmt.Println("IMPORTANT: Save this token now. It cannot be retrieved again.")
-	fmt.Println("Only the bcrypt hash is stored in the database.")
+	fmt.Println("Only one-way bcrypt and SHA-256 hashes are stored in the database.")
 
 	return nil
+}
+
+func issueInstallerTokenWithDB(db *sql.DB, customerID, notes string, expiresInDays int) (string, *time.Time, error) {
+	token, err := generateToken(tokenPrefix)
+	if err != nil {
+		return "", nil, err
+	}
+
+	hash, err := hashToken(token)
+	if err != nil {
+		return "", nil, err
+	}
+
+	var expiresAt *time.Time
+	if expiresInDays > 0 {
+		t := time.Now().AddDate(0, 0, expiresInDays)
+		expiresAt = &t
+	}
+
+	_, err = db.Exec(`
+		INSERT INTO installer_tokens (customer_id, token_sha256, token_hash, expires_at, notes)
+		VALUES (?, ?, ?, ?, ?)
+	`, customerID, tokenSHA256(token), hash, expiresAt, notes)
+	if err != nil {
+		var sqliteErr sqlite3.Error
+		if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+			return "", nil, fmt.Errorf("token collision (extremely unlikely), please try again")
+		}
+		return "", nil, err
+	}
+
+	return token, expiresAt, nil
 }
 
 func issueOwnerToken(name, scopes, notes string, expiresInDays int) error {
@@ -134,31 +142,8 @@ func issueOwnerToken(name, scopes, notes string, expiresInDays int) error {
 	}
 	defer db.Close()
 
-	token, err := generateToken(ownerTokenPrefix)
+	token, expiresAt, err := issueOwnerTokenWithDB(db, name, scopes, notes, expiresInDays)
 	if err != nil {
-		return err
-	}
-
-	hash, err := hashToken(token)
-	if err != nil {
-		return err
-	}
-
-	var expiresAt *time.Time
-	if expiresInDays > 0 {
-		t := time.Now().AddDate(0, 0, expiresInDays)
-		expiresAt = &t
-	}
-
-	_, err = db.Exec(`
-		INSERT INTO owner_tokens (name, token_hash, scopes, expires_at, notes)
-		VALUES (?, ?, ?, ?, ?)
-	`, name, hash, scopes, expiresAt, notes)
-	if err != nil {
-		var sqliteErr sqlite3.Error
-		if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
-			return fmt.Errorf("token collision (extremely unlikely), please try again")
-		}
 		return err
 	}
 
@@ -175,12 +160,44 @@ func issueOwnerToken(name, scopes, notes string, expiresInDays int) error {
 	fmt.Printf("Notes:    %s\n", notes)
 	fmt.Println()
 	fmt.Println("IMPORTANT: Save this token now. It cannot be retrieved again.")
-	fmt.Println("Only the bcrypt hash is stored in the database.")
+	fmt.Println("Only one-way bcrypt and SHA-256 hashes are stored in the database.")
 	fmt.Println()
 	fmt.Println("Use this token for CI/CD registry push operations.")
 	fmt.Println("Release workflow requires explicit staging and customer repository push/pull scopes")
 
 	return nil
+}
+
+func issueOwnerTokenWithDB(db *sql.DB, name, scopes, notes string, expiresInDays int) (string, *time.Time, error) {
+	token, err := generateToken(ownerTokenPrefix)
+	if err != nil {
+		return "", nil, err
+	}
+
+	hash, err := hashToken(token)
+	if err != nil {
+		return "", nil, err
+	}
+
+	var expiresAt *time.Time
+	if expiresInDays > 0 {
+		t := time.Now().AddDate(0, 0, expiresInDays)
+		expiresAt = &t
+	}
+
+	_, err = db.Exec(`
+		INSERT INTO owner_tokens (name, token_sha256, token_hash, scopes, expires_at, notes)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, name, tokenSHA256(token), hash, scopes, expiresAt, notes)
+	if err != nil {
+		var sqliteErr sqlite3.Error
+		if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+			return "", nil, fmt.Errorf("token collision (extremely unlikely), please try again")
+		}
+		return "", nil, err
+	}
+
+	return token, expiresAt, nil
 }
 
 func listTokens() error {

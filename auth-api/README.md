@@ -96,7 +96,7 @@ Expires:     2025-08-19
 Notes:       Founding member beta
 
 IMPORTANT: Save this token now. It cannot be retrieved again.
-Only the bcrypt hash is stored in the database.
+Only one-way bcrypt and SHA-256 hashes are stored in the database.
 ```
 
 ### List Tokens
@@ -203,7 +203,7 @@ Required GitHub Secrets:
 
 ## Security Model
 
-- **Installer Tokens**: Stored as bcrypt hashes only, never plaintext
+- **Installer Tokens**: Stored as bcrypt and SHA-256 hashes, never plaintext
 - **Registry Tokens**: JWT (RS256), 1-hour TTL, pull-only scope, audience-bound
 - **Rate Limiting**: 50 req/min per IP on Auth API
 - **Logging**: Structured JSON, tokens redacted to prefix only (`lm_inst_****`)

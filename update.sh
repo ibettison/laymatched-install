@@ -369,23 +369,75 @@ validate_registry_url() {
     esac
 }
 
+AUTH_RESPONSE_DIR=""
+
+cleanup_auth_response() {
+    local response_dir="${AUTH_RESPONSE_DIR:-}"
+    if [ -z "$response_dir" ]; then
+        return 0
+    fi
+    case "$response_dir" in
+        /tmp/laymatched-auth-response.*) rm -rf -- "$response_dir" || true ;;
+    esac
+    AUTH_RESPONSE_DIR=""
+}
+
+auth_response_signal_exit() {
+    local exit_code="$1"
+    cleanup_auth_response
+    trap - EXIT HUP INT TERM
+    exit "$exit_code"
+}
+
 call_auth_api() {
     local installer_token="$1"
     log_info "Contacting LayMatched authorization service..."
 
     # Build JSON safely using python3 to avoid injection issues
     local json_payload
-    json_payload=$(python3 -c "import json, sys; print(json.dumps({'installer_token': sys.argv[1])})" "$installer_token")
+    json_payload=$(python3 -c '
+import json, sys
+print(json.dumps({"installer_token": sys.argv[1]}))
+' "$installer_token")
 
-    local response
-    if ! response=$(curl -fsS -X POST \
-        -H "Content-Type: application/json" \
-        -d "$json_payload" \
-        "${AUTH_API_URL}" 2>/dev/null); then
-        log_error "Failed to contact LayMatched authorization service. Check network connectivity and try again."
-    fi
+	local response response_file http_status
+	AUTH_RESPONSE_DIR=$(mktemp -d /tmp/laymatched-auth-response.XXXXXX) || \
+		log_error "Cannot create a temporary authorization response directory."
+	trap cleanup_auth_response EXIT
+	trap 'auth_response_signal_exit 129' HUP
+	trap 'auth_response_signal_exit 130' INT
+	trap 'auth_response_signal_exit 143' TERM
+	response_file="${AUTH_RESPONSE_DIR}/response.json"
+	if ! http_status=$(curl -sS -X POST \
+		-H "Content-Type: application/json" \
+		-d "$json_payload" \
+		-o "$response_file" -w "%{http_code}" \
+		"${AUTH_API_URL}" 2>/dev/null); then
+		cleanup_auth_response
+		log_error "Failed to contact LayMatched authorization service. Check network connectivity and try again."
+	fi
 
-    # Parse JSON response using python3 (available on target Ubuntu)
+	case "$http_status" in
+		200)
+			response=$(cat "$response_file")
+			cleanup_auth_response
+			trap - EXIT HUP INT TERM
+			;;
+		401)
+			cleanup_auth_response
+			log_error "Authorization service rejected the installer token (HTTP 401). Verify the token is correct, active, and not expired."
+			;;
+		4??|5??)
+			cleanup_auth_response
+			log_error "Authorization service returned HTTP ${http_status}. Try again later or contact support."
+			;;
+		*)
+			cleanup_auth_response
+			log_error "Authorization service returned an invalid HTTP status. Check network connectivity and try again."
+			;;
+	esac
+
+	# Parse JSON response using python3 (available on target Ubuntu)
     REGISTRY_TOKEN=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_token', ''))")
     APPROVED_VERSION=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('approved_version', ''))")
     REGISTRY_URL=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_url', ''))")
