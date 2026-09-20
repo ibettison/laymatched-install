@@ -282,7 +282,7 @@ class MfaEncryptionKeyTests(unittest.TestCase):
             candidate.unlink()
             self.assertEqual(source.read_text(), original_source)
 
-    def test_failed_candidate_health_preserves_recovery_artifacts_and_does_not_restore_old_app(self):
+    def test_failed_candidate_restart_or_health_stops_only_application_services(self):
         write_state = script_function("write_recovery_state")
         handle_failure = script_function("handle_candidate_failure")
         with tempfile.TemporaryDirectory() as directory:
@@ -312,10 +312,12 @@ RECOVERY_STATE_FILE="$3"
 PERSISTENT_COMPOSE_FILE="$4"
 CURRENT_APP_VERSION=old-version
 CANDIDATE_VERSION=new-version
+CANDIDATE_RESTART_ATTEMPTED=1
 DOCKER_CALLS="$6"
 export DOCKER_CALLS
 PATH="$5:$PATH"
 export PATH
+handle_candidate_failure candidate_restart_failed
 handle_candidate_failure candidate_health_check_timeout
 """
             result = subprocess.run(
@@ -349,9 +351,72 @@ handle_candidate_failure candidate_health_check_timeout
             )
             self.assertNotIn(secret, recovery)
             docker_call = docker_calls.read_text()
-            self.assertIn("compose --env-file", docker_call)
-            self.assertIn(" -f ", docker_call)
-            self.assertTrue(docker_call.rstrip().endswith(" stop"))
+            docker_calls_lines = docker_call.splitlines()
+            self.assertEqual(len(docker_calls_lines), 2)
+            for call in docker_calls_lines:
+                self.assertIn("compose --env-file", call)
+                self.assertIn(" -f ", call)
+                self.assertTrue(call.endswith(" stop api web"))
+                self.assertNotIn(" stop db", call)
+
+    def test_failed_candidate_pull_preserves_existing_installation_without_stop(self):
+        write_state = script_function("write_recovery_state")
+        handle_failure = script_function("handle_candidate_failure")
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            env_file = project / ".env.candidate"
+            compose_file = project / "docker-compose.candidate.yml"
+            persistent_file = project / "docker-compose.yml"
+            recovery_file = project / ".update-recovery"
+            mock_bin = project / "bin"
+            docker_calls = project / "docker-calls"
+            mock_bin.mkdir()
+            (mock_bin / "docker").write_text(
+                "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$DOCKER_CALLS\"\n"
+            )
+            (mock_bin / "docker").chmod(0o700)
+            env_file.write_text("candidate env\n")
+            compose_file.write_text("candidate compose\n")
+            persistent_file.write_text("previous compose\n")
+            original_persistent = persistent_file.read_text()
+            shell = f"""set -eu
+{write_state}
+{handle_failure}
+CANDIDATE_ENV_FILE="$1"
+CANDIDATE_COMPOSE_FILE="$2"
+RECOVERY_STATE_FILE="$3"
+PERSISTENT_COMPOSE_FILE="$4"
+CURRENT_APP_VERSION=old-version
+CANDIDATE_VERSION=new-version
+CANDIDATE_RESTART_ATTEMPTED=0
+DOCKER_CALLS="$6"
+export DOCKER_CALLS
+PATH="$5:$PATH"
+export PATH
+handle_candidate_failure candidate_pull_failed
+"""
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-s",
+                    str(env_file),
+                    str(compose_file),
+                    str(recovery_file),
+                    str(persistent_file),
+                    str(mock_bin),
+                    str(docker_calls),
+                ],
+                input=shell,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(env_file.exists())
+            self.assertTrue(compose_file.exists())
+            self.assertEqual(persistent_file.read_text(), original_persistent)
+            self.assertTrue(recovery_file.exists())
+            self.assertFalse(docker_calls.exists())
 
     def test_successful_candidate_promotion_clears_recovery_and_candidate_artifacts(self):
         cleanup = script_function("cleanup_ephemeral_docker_auth")

@@ -19,6 +19,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 CANDIDATE_ENV_FILE=""
 CANDIDATE_COMPOSE_FILE=""
+CANDIDATE_RESTART_ATTEMPTED=0
 PERSISTENT_COMPOSE_FILE="/opt/laymatched/docker-compose.yml"
 RECOVERY_STATE_FILE="/opt/laymatched/.update-recovery"
 PRESERVE_RECOVERY_ARTIFACTS=0
@@ -166,12 +167,15 @@ handle_candidate_failure() {
     local reason="$1"
     PRESERVE_RECOVERY_ARTIFACTS=1
     RECOVERY_REASON="$reason"
-    if [ -f "${CANDIDATE_ENV_FILE:-}" ] && [ -f "${CANDIDATE_COMPOSE_FILE:-}" ]; then
-        # Stop the failed candidate project without starting the previous
-        # application image against a database whose migration compatibility
-        # is unknown. The database volume is retained for diagnosis/recovery.
+    if [ "${CANDIDATE_RESTART_ATTEMPTED:-0}" = 1 ] \
+        && [ -f "${CANDIDATE_ENV_FILE:-}" ] \
+        && [ -f "${CANDIDATE_COMPOSE_FILE:-}" ]; then
+        # A pull failure has not started a candidate and must not stop the
+        # existing installation. After a restart attempt, stop only the
+        # application services that may be candidate containers; leave the
+        # database service and volume available for diagnosis/recovery.
         docker compose --env-file "$CANDIDATE_ENV_FILE" -f "$CANDIDATE_COMPOSE_FILE" \
-            stop >/dev/null 2>&1 || true
+            stop api web >/dev/null 2>&1 || true
     fi
     write_recovery_state
 }
@@ -419,6 +423,7 @@ fi
 
 log_info "Phase 5: Restarting services with candidate release..."
 
+CANDIDATE_RESTART_ATTEMPTED=1
 if ! docker compose --env-file .env.candidate -f "$CANDIDATE_COMPOSE_FILE" up -d; then
     handle_candidate_failure "candidate_restart_failed"
     log_error "Candidate restart failed. Candidate artifacts were retained; automatic rollback was not attempted. Review $RECOVERY_STATE_FILE before recovery."
