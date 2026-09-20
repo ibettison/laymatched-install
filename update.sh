@@ -19,6 +19,10 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 CANDIDATE_ENV_FILE=""
 CANDIDATE_COMPOSE_FILE=""
+PERSISTENT_COMPOSE_FILE="/opt/laymatched/docker-compose.yml"
+RECOVERY_STATE_FILE="/opt/laymatched/.update-recovery"
+PRESERVE_RECOVERY_ARTIFACTS=0
+RECOVERY_REASON=""
 
 ensure_mfa_encryption_key() {
     local env_file="$1"
@@ -136,6 +140,42 @@ os.replace(temporary_path, destination)
 PY
 }
 
+write_recovery_state() {
+    if [ -z "${CANDIDATE_ENV_FILE:-}" ] || [ -z "${CANDIDATE_COMPOSE_FILE:-}" ]; then
+        return 0
+    fi
+    if [ ! -f "$CANDIDATE_ENV_FILE" ] && [ ! -f "$CANDIDATE_COMPOSE_FILE" ]; then
+        return 0
+    fi
+    cat > "$RECOVERY_STATE_FILE" <<EOF
+status=manual_recovery_required
+reason=${RECOVERY_REASON:-candidate_deployment_failed}
+previous_compose=${PERSISTENT_COMPOSE_FILE}
+candidate_env=${CANDIDATE_ENV_FILE}
+candidate_compose=${CANDIDATE_COMPOSE_FILE}
+old_version=${CURRENT_APP_VERSION:-unknown}
+candidate_version=${CANDIDATE_VERSION:-unknown}
+database_rollback=not_attempted
+automatic_container_restore=not_safe_without_migration_policy_and_snapshot
+next_action=review_database_migration_state_and_pre_update_snapshot_before_restarting_any_previous_application_image
+EOF
+    chmod 600 "$RECOVERY_STATE_FILE"
+}
+
+handle_candidate_failure() {
+    local reason="$1"
+    PRESERVE_RECOVERY_ARTIFACTS=1
+    RECOVERY_REASON="$reason"
+    if [ -f "${CANDIDATE_ENV_FILE:-}" ] && [ -f "${CANDIDATE_COMPOSE_FILE:-}" ]; then
+        # Stop the failed candidate project without starting the previous
+        # application image against a database whose migration compatibility
+        # is unknown. The database volume is retained for diagnosis/recovery.
+        docker compose --env-file "$CANDIDATE_ENV_FILE" -f "$CANDIDATE_COMPOSE_FILE" \
+            stop >/dev/null 2>&1 || true
+    fi
+    write_recovery_state
+}
+
 # BEGIN EPHEMERAL DOCKER AUTH
 # Keep registry credentials out of the customer's normal/root Docker
 # credential store. This is intentionally self-contained for older installs
@@ -143,13 +183,17 @@ PY
 EPHEMERAL_DOCKER_CONFIG_DIR=""
 
 cleanup_ephemeral_docker_auth() {
-    if [ -n "${CANDIDATE_ENV_FILE:-}" ]; then
-        rm -f -- "$CANDIDATE_ENV_FILE" || true
-        CANDIDATE_ENV_FILE=""
-    fi
-    if [ -n "${CANDIDATE_COMPOSE_FILE:-}" ]; then
-        rm -f -- "$CANDIDATE_COMPOSE_FILE" || true
-        CANDIDATE_COMPOSE_FILE=""
+    if [ "${PRESERVE_RECOVERY_ARTIFACTS:-0}" = 1 ]; then
+        write_recovery_state
+    else
+        if [ -n "${CANDIDATE_ENV_FILE:-}" ]; then
+            rm -f -- "$CANDIDATE_ENV_FILE" || true
+            CANDIDATE_ENV_FILE=""
+        fi
+        if [ -n "${CANDIDATE_COMPOSE_FILE:-}" ]; then
+            rm -f -- "$CANDIDATE_COMPOSE_FILE" || true
+            CANDIDATE_COMPOSE_FILE=""
+        fi
     fi
     local config_dir="${EPHEMERAL_DOCKER_CONFIG_DIR:-}"
     if [ -z "$config_dir" ]; then
@@ -344,6 +388,8 @@ cd /opt/laymatched
 cp .env .env.candidate
 CANDIDATE_ENV_FILE="/opt/laymatched/.env.candidate"
 CANDIDATE_COMPOSE_FILE="/opt/laymatched/docker-compose.candidate.yml"
+PRESERVE_RECOVERY_ARTIFACTS=1
+RECOVERY_REASON="candidate_deployment_failed"
 # Update candidate APP_VERSION
 sed -i "s/^APP_VERSION=.*/APP_VERSION=${CANDIDATE_VERSION}/" .env.candidate
 # Handle REGISTRY_URL: replace if exists, append if missing (legacy .env migration)
@@ -364,13 +410,19 @@ log_info "Phase 4: Pulling candidate LayMatched release (${CANDIDATE_VERSION})..
 
 # Use the candidate environment and candidate Compose file for interpolation
 # and the first candidate restart. The persistent Compose file is unchanged.
-docker compose --env-file .env.candidate -f "$CANDIDATE_COMPOSE_FILE" pull
+if ! docker compose --env-file .env.candidate -f "$CANDIDATE_COMPOSE_FILE" pull; then
+    handle_candidate_failure "candidate_pull_failed"
+    log_error "Candidate image pull failed. Candidate artifacts were retained; automatic rollback was not attempted. Review $RECOVERY_STATE_FILE before recovery."
+fi
 
 # -- Phase 5: Restart services with candidate version ----------------------
 
 log_info "Phase 5: Restarting services with candidate release..."
 
-docker compose --env-file .env.candidate -f "$CANDIDATE_COMPOSE_FILE" up -d
+if ! docker compose --env-file .env.candidate -f "$CANDIDATE_COMPOSE_FILE" up -d; then
+    handle_candidate_failure "candidate_restart_failed"
+    log_error "Candidate restart failed. Candidate artifacts were retained; automatic rollback was not attempted. Review $RECOVERY_STATE_FILE before recovery."
+fi
 cd - > /dev/null
 
 # -- Phase 6: Health checks ----------------------------------------------
@@ -397,12 +449,8 @@ done
 # -- Phase 7: Status - fail clearly if unhealthy -------------------------
 
 if [ $ELAPSED -ge $MAX_WAIT ]; then
-    # Clean up candidate env on failure
-    rm -f /opt/laymatched/.env.candidate
-    rm -f /opt/laymatched/docker-compose.candidate.yml
-    CANDIDATE_ENV_FILE=""
-    CANDIDATE_COMPOSE_FILE=""
-    log_error "Health check timeout reached after $MAX_WAIT seconds. ${APP_NAME} is not responding. Update failed. Check container logs with: docker logs -f ${APP_NAME}"
+    handle_candidate_failure "candidate_health_check_timeout"
+    log_error "Candidate health gate failed. Candidate containers were stopped; automatic rollback was not attempted because migration compatibility and a pre-update database snapshot were not available. Review $RECOVERY_STATE_FILE before restarting any previous application image."
 fi
 
 # -- Phase 8: Candidate healthy - persist new version and regenerate Compose --
@@ -508,6 +556,12 @@ networks:
   laymatched_net:
     driver: bridge
 COMPOSE_EOF
+
+# The candidate is now healthy and the persistent Compose file has been
+# regenerated for the promoted release. Recovery artifacts are no longer
+# needed on the successful path.
+rm -f "$RECOVERY_STATE_FILE"
+PRESERVE_RECOVERY_ARTIFACTS=0
 
 # Clean up candidate env file
 rm -f .env.candidate

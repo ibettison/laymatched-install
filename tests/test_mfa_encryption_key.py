@@ -52,6 +52,14 @@ def candidate_compose_function() -> str:
     return match.group(1)
 
 
+def script_function(name: str) -> str:
+    script = (ROOT / "update.sh").read_text()
+    match = re.search(rf"({re.escape(name)}\(\) \{{.*?\n\}})", script, re.DOTALL)
+    if not match:
+        raise AssertionError(f"{name} function not found")
+    return match.group(1)
+
+
 class MfaEncryptionKeyTests(unittest.TestCase):
     def test_fresh_key_is_generated_once_with_private_permissions_and_no_secret_log(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -273,6 +281,118 @@ class MfaEncryptionKeyTests(unittest.TestCase):
             # Compose file remains the rollback configuration.
             candidate.unlink()
             self.assertEqual(source.read_text(), original_source)
+
+    def test_failed_candidate_health_preserves_recovery_artifacts_and_does_not_restore_old_app(self):
+        write_state = script_function("write_recovery_state")
+        handle_failure = script_function("handle_candidate_failure")
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            env_file = project / ".env.candidate"
+            compose_file = project / "docker-compose.candidate.yml"
+            persistent_file = project / "docker-compose.yml"
+            recovery_file = project / ".update-recovery"
+            mock_bin = project / "bin"
+            docker_calls = project / "docker-calls"
+            mock_bin.mkdir()
+            (mock_bin / "docker").write_text(
+                "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$DOCKER_CALLS\"\n"
+            )
+            (mock_bin / "docker").chmod(0o700)
+            secret = "recovery-test-secret-0123456789-abcdefghijklmnopqrstuvwxyz"
+            env_file.write_text(f"AUTH_MFA_ENCRYPTION_KEY={secret}\n")
+            compose_file.write_text("candidate compose\n")
+            persistent_file.write_text("previous compose\n")
+            original_persistent = persistent_file.read_text()
+            shell = f"""set -eu
+{write_state}
+{handle_failure}
+CANDIDATE_ENV_FILE="$1"
+CANDIDATE_COMPOSE_FILE="$2"
+RECOVERY_STATE_FILE="$3"
+PERSISTENT_COMPOSE_FILE="$4"
+CURRENT_APP_VERSION=old-version
+CANDIDATE_VERSION=new-version
+DOCKER_CALLS="$6"
+export DOCKER_CALLS
+PATH="$5:$PATH"
+export PATH
+handle_candidate_failure candidate_health_check_timeout
+"""
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-s",
+                    str(env_file),
+                    str(compose_file),
+                    str(recovery_file),
+                    str(persistent_file),
+                    str(mock_bin),
+                    str(docker_calls),
+                ],
+                input=shell,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(env_file.exists())
+            self.assertTrue(compose_file.exists())
+            self.assertEqual(persistent_file.read_text(), original_persistent)
+            self.assertEqual(stat.S_IMODE(recovery_file.stat().st_mode), 0o600)
+            recovery = recovery_file.read_text()
+            self.assertIn("status=manual_recovery_required", recovery)
+            self.assertIn("reason=candidate_health_check_timeout", recovery)
+            self.assertIn("database_rollback=not_attempted", recovery)
+            self.assertIn(
+                "automatic_container_restore=not_safe_without_migration_policy_and_snapshot",
+                recovery,
+            )
+            self.assertNotIn(secret, recovery)
+            docker_call = docker_calls.read_text()
+            self.assertIn("compose --env-file", docker_call)
+            self.assertIn(" -f ", docker_call)
+            self.assertTrue(docker_call.rstrip().endswith(" stop"))
+
+    def test_successful_candidate_promotion_clears_recovery_and_candidate_artifacts(self):
+        cleanup = script_function("cleanup_ephemeral_docker_auth")
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            env_file = project / ".env.candidate"
+            compose_file = project / "docker-compose.candidate.yml"
+            persistent_file = project / "docker-compose.yml"
+            recovery_file = project / ".update-recovery"
+            env_file.write_text("candidate env\n")
+            compose_file.write_text("candidate compose\n")
+            recovery_file.write_text("status=manual_recovery_required\n")
+            persistent_file.write_text("promoted compose\n")
+            shell = f"""set -eu
+{cleanup}
+CANDIDATE_ENV_FILE="$1"
+CANDIDATE_COMPOSE_FILE="$2"
+RECOVERY_STATE_FILE="$3"
+PRESERVE_RECOVERY_ARTIFACTS=0
+EPHEMERAL_DOCKER_CONFIG_DIR=""
+rm -f "$RECOVERY_STATE_FILE"
+cleanup_ephemeral_docker_auth
+"""
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-s",
+                    str(env_file),
+                    str(compose_file),
+                    str(recovery_file),
+                ],
+                input=shell,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(env_file.exists())
+            self.assertFalse(compose_file.exists())
+            self.assertFalse(recovery_file.exists())
+            self.assertEqual(persistent_file.read_text(), "promoted compose\n")
 
 
 if __name__ == "__main__":
