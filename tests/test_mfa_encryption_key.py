@@ -40,6 +40,18 @@ def update_function() -> str:
     return match.group(1)
 
 
+def candidate_compose_function() -> str:
+    script = (ROOT / "update.sh").read_text()
+    match = re.search(
+        r"(prepare_candidate_compose\(\) \{.*?\n\})\n\n# BEGIN EPHEMERAL DOCKER AUTH",
+        script,
+        re.DOTALL,
+    )
+    if not match:
+        raise AssertionError("candidate Compose preparation function not found")
+    return match.group(1)
+
+
 class MfaEncryptionKeyTests(unittest.TestCase):
     def test_fresh_key_is_generated_once_with_private_permissions_and_no_secret_log(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -174,6 +186,93 @@ class MfaEncryptionKeyTests(unittest.TestCase):
                 for service_name in ("db", "web"):
                     service_env = rendered["services"][service_name].get("environment", {})
                     self.assertNotIn("AUTH_MFA_ENCRYPTION_KEY", service_env)
+
+    def test_legacy_candidate_restart_gets_key_without_replacing_rollback_compose(self):
+        legacy_compose = """services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+  api:
+    image: registry.example/laymatched-api:${APP_VERSION}
+    environment:
+      - AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
+      - AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
+  web:
+    image: registry.example/laymatched-web:${APP_VERSION}
+    environment:
+      - API_URL=http://api:8000
+"""
+        function = candidate_compose_function()
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            source = project / "docker-compose.yml"
+            candidate = project / "docker-compose.candidate.yml"
+            source.write_text(legacy_compose)
+            original_source = source.read_text()
+            shell = f"set -e\n{function}\nprepare_candidate_compose \"$1\" \"$2\""
+            result = subprocess.run(
+                ["bash", "-s", str(source), str(candidate)],
+                input=shell,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(source.read_text(), original_source)
+            self.assertEqual(stat.S_IMODE(candidate.stat().st_mode), 0o600)
+
+            key = "legacy-candidate-mfa-key-0123456789-abcdefghijklmnopqrstuvwxyz"
+            env_file = project / ".env"
+            env_file.write_text(
+                "\n".join(
+                    (
+                        "POSTGRES_PASSWORD=postgres-test-password",
+                        "APP_VERSION=v1.0.0",
+                        "AUTH_SESSION_SECRET=session-test-secret",
+                        f"AUTH_MFA_ENCRYPTION_KEY={key}",
+                        "AUTH_SESSION_HOURS=24",
+                        "",
+                    )
+                )
+            )
+            rendered_result = subprocess.run(
+                [
+                    "docker",
+                    "compose",
+                    "--project-directory",
+                    str(project),
+                    "--env-file",
+                    str(env_file),
+                    "-f",
+                    str(candidate),
+                    "config",
+                    "--format",
+                    "json",
+                ],
+                env={key: value for key, value in os.environ.items() if key != "AUTH_MFA_ENCRYPTION_KEY"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(rendered_result.returncode, 0, rendered_result.stderr)
+            rendered = json.loads(rendered_result.stdout)
+            self.assertEqual(
+                rendered["services"]["api"]["environment"]["AUTH_MFA_ENCRYPTION_KEY"], key
+            )
+            self.assertNotIn(
+                "AUTH_MFA_ENCRYPTION_KEY",
+                rendered["services"]["db"].get("environment", {}),
+            )
+            self.assertNotIn(
+                "AUTH_MFA_ENCRYPTION_KEY",
+                rendered["services"]["web"].get("environment", {}),
+            )
+
+            # Simulate a failed candidate health gate: the old persistent
+            # Compose file remains the rollback configuration.
+            candidate.unlink()
+            self.assertEqual(source.read_text(), original_source)
 
 
 if __name__ == "__main__":

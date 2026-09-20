@@ -17,6 +17,9 @@ log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+CANDIDATE_ENV_FILE=""
+CANDIDATE_COMPOSE_FILE=""
+
 ensure_mfa_encryption_key() {
     local env_file="$1"
     local helper="${MFA_KEY_HELPER:-/opt/laymatched/ensure-mfa-encryption-key.sh}"
@@ -70,6 +73,69 @@ ensure_mfa_encryption_key() {
     chmod 600 "$env_file"
 }
 
+prepare_candidate_compose() {
+    local source_file="$1"
+    local destination_file="$2"
+
+    python3 - "$source_file" "$destination_file" <<'PY'
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+lines = source.read_text().splitlines(keepends=True)
+
+service_start = next((index for index, line in enumerate(lines) if line == "  api:\n"), None)
+if service_start is None:
+    raise SystemExit("Candidate Compose file has no api service.")
+
+service_end = len(lines)
+for index in range(service_start + 1, len(lines)):
+    if re.match(r"^  [^ \n].*:\s*$", lines[index]):
+        service_end = index
+        break
+
+api_lines = lines[service_start:service_end]
+if any("AUTH_MFA_ENCRYPTION_KEY" in line for line in api_lines):
+    rendered = lines
+else:
+    environment_index = next(
+        (index for index, line in enumerate(api_lines) if line == "    environment:\n"),
+        None,
+    )
+    if environment_index is None:
+        raise SystemExit("API service has no environment block.")
+
+    insert_at = environment_index + 1
+    while insert_at < len(api_lines):
+        line = api_lines[insert_at]
+        if line.strip() and not line.startswith("      "):
+            break
+        insert_at += 1
+
+    existing_environment_lines = [
+        line for line in api_lines[environment_index + 1:insert_at] if line.strip()
+    ]
+    mapping_style = existing_environment_lines and not existing_environment_lines[0].lstrip().startswith("-")
+    entry = (
+        "      AUTH_MFA_ENCRYPTION_KEY: ${AUTH_MFA_ENCRYPTION_KEY}\n"
+        if mapping_style
+        else "      - AUTH_MFA_ENCRYPTION_KEY=${AUTH_MFA_ENCRYPTION_KEY}\n"
+    )
+    rendered = lines[: service_start + insert_at] + [entry] + lines[service_start + insert_at:]
+
+destination.parent.mkdir(parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile("w", dir=destination.parent, delete=False) as temporary:
+    temporary.writelines(rendered)
+    temporary_path = Path(temporary.name)
+os.chmod(temporary_path, 0o600)
+os.replace(temporary_path, destination)
+PY
+}
+
 # BEGIN EPHEMERAL DOCKER AUTH
 # Keep registry credentials out of the customer's normal/root Docker
 # credential store. This is intentionally self-contained for older installs
@@ -77,6 +143,14 @@ ensure_mfa_encryption_key() {
 EPHEMERAL_DOCKER_CONFIG_DIR=""
 
 cleanup_ephemeral_docker_auth() {
+    if [ -n "${CANDIDATE_ENV_FILE:-}" ]; then
+        rm -f -- "$CANDIDATE_ENV_FILE" || true
+        CANDIDATE_ENV_FILE=""
+    fi
+    if [ -n "${CANDIDATE_COMPOSE_FILE:-}" ]; then
+        rm -f -- "$CANDIDATE_COMPOSE_FILE" || true
+        CANDIDATE_COMPOSE_FILE=""
+    fi
     local config_dir="${EPHEMERAL_DOCKER_CONFIG_DIR:-}"
     if [ -z "$config_dir" ]; then
         return 0
@@ -268,6 +342,8 @@ log_info "Phase 3: Preparing candidate deployment environment..."
 # Create candidate .env by copying persistent .env and updating candidate values
 cd /opt/laymatched
 cp .env .env.candidate
+CANDIDATE_ENV_FILE="/opt/laymatched/.env.candidate"
+CANDIDATE_COMPOSE_FILE="/opt/laymatched/docker-compose.candidate.yml"
 # Update candidate APP_VERSION
 sed -i "s/^APP_VERSION=.*/APP_VERSION=${CANDIDATE_VERSION}/" .env.candidate
 # Handle REGISTRY_URL: replace if exists, append if missing (legacy .env migration)
@@ -277,18 +353,24 @@ else
     echo "REGISTRY_URL=${CANDIDATE_REGISTRY_URL}" >> .env.candidate
 fi
 
+# Keep the persistent Compose file unchanged until the candidate is healthy.
+# Legacy files may lack the MFA API mapping, so prepare an ephemeral candidate
+# file for the first restart instead of deploying from the old template.
+prepare_candidate_compose docker-compose.yml "$CANDIDATE_COMPOSE_FILE"
+
 # -- Phase 4: Pull candidate LayMatched images -----------------------------
 
 log_info "Phase 4: Pulling candidate LayMatched release (${CANDIDATE_VERSION})..."
 
-# Use candidate .env for Compose variable interpolation
-docker compose --env-file .env.candidate pull
+# Use the candidate environment and candidate Compose file for interpolation
+# and the first candidate restart. The persistent Compose file is unchanged.
+docker compose --env-file .env.candidate -f "$CANDIDATE_COMPOSE_FILE" pull
 
 # -- Phase 5: Restart services with candidate version ----------------------
 
 log_info "Phase 5: Restarting services with candidate release..."
 
-docker compose --env-file .env.candidate up -d
+docker compose --env-file .env.candidate -f "$CANDIDATE_COMPOSE_FILE" up -d
 cd - > /dev/null
 
 # -- Phase 6: Health checks ----------------------------------------------
@@ -317,6 +399,9 @@ done
 if [ $ELAPSED -ge $MAX_WAIT ]; then
     # Clean up candidate env on failure
     rm -f /opt/laymatched/.env.candidate
+    rm -f /opt/laymatched/docker-compose.candidate.yml
+    CANDIDATE_ENV_FILE=""
+    CANDIDATE_COMPOSE_FILE=""
     log_error "Health check timeout reached after $MAX_WAIT seconds. ${APP_NAME} is not responding. Update failed. Check container logs with: docker logs -f ${APP_NAME}"
 fi
 
@@ -426,6 +511,9 @@ COMPOSE_EOF
 
 # Clean up candidate env file
 rm -f .env.candidate
+CANDIDATE_ENV_FILE=""
+rm -f "$CANDIDATE_COMPOSE_FILE"
+CANDIDATE_COMPOSE_FILE=""
 
 cd - > /dev/null
 
