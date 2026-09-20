@@ -2,8 +2,19 @@
 
 Date: 2026-09-20
 
-This is a read-only architecture discovery report. No application code,
-production configuration, live customer data, or running services were changed.
+This is a bounded architecture assessment. The report edit is documentation-only;
+no application code, production configuration, live customer data, or running
+services were changed.
+
+Evidence labels used below:
+
+- **Verified source** means present in the inspected repository at the cited
+  revision.
+- **Approved design** means specified by the activation architecture/contract,
+  not necessarily implemented or deployed.
+- **Runtime unknown** means no live installation or service was inspected.
+- **Proposal** means a possible later implementation, subject to the relevant
+  architecture gate.
 
 Source references use:
 
@@ -19,14 +30,15 @@ Source references use:
 | Repository | Checked-out branch | Checked-out HEAD | Default branch reference | Worktree |
 |---|---|---|---|---|
 | `ibettison/layMatchedBetting` | `codex/campaign-gradient-cache-bust` | `f7a0c3ff40c36b7e2ed44a2dd7e1f964d429b374` | `origin/main` | Pre-existing modified public-site files, images and `node_modules/` |
-| `ibettison/laymatched-install` | `main` | `1a7328dc89a1b11b9e3dfe838f2dcb223b0f7562` | `origin/main` | Pre-existing modified PAD documentation |
+| `ibettison/laymatched-install` | `sc-01-architecture-discovery-report` | `9188337394ac5697ba7229709079dba330955ab1` | `origin/main` | Pre-existing modified PAD documentation |
 
 The primary checked-out branch is divergent from current `origin/main` and was
 not switched during discovery. Current application behaviour was therefore
 audited from the immutable local `origin/main` ref.
 
-Both repositories and remotes were accessible locally. GitHub API connectivity
-was intermittent during the final re-check; no external state was changed.
+Both repositories and remotes were accessible locally. PR #25 remained open,
+targeted `main`, and pointed to the report commit above when this revision was
+prepared. No external state was changed by this documentation edit.
 
 ## B. Executive summary
 
@@ -73,6 +85,13 @@ Customer browser -> customer Nginx -> customer API -> customer PostgreSQL
 Installer VPS -> Auth API -> private registry -> local customer Compose stack
 
 Installer activation journal -> read-only state.json -> customer activation API
+
+Approved but not verified as implemented in the inspected runtime:
+
+```text
+Installer credential -> POST /v1/activations -> central customer/licence identity
+Installation key + short-lived JWT -> signed activation/status/heartbeat requests
+```
 ```
 
 Verified evidence:
@@ -91,8 +110,13 @@ Verified evidence:
   [`install.sh`](https://github.com/ibettison/laymatched-install/blob/1a7328dc89a1b11b9e3dfe838f2dcb223b0f7562/install.sh#L467-L549)
 
 The customer `/api/community/*` and central `/v1/community/*` routes are
-separate implementations. No production customer HTTP client, central service
-URL, heartbeat, retry queue or version negotiation was found connecting them.
+separate implementations. **Verified source:** no production customer HTTP
+client, central service URL, heartbeat caller, retry queue or version negotiation
+was found connecting them. **Approved design:** the existing activation contract
+already defines installation identity, signed requests, heartbeat and MFA-status
+endpoints; SC-01 must extend or use that contract rather than introduce a
+parallel reporting credential or transport. **Runtime unknown:** no live
+activation service or customer installation was inspected.
 
 ## D. Customer capability inventory
 
@@ -119,7 +143,8 @@ URL, heartbeat, retry queue or version negotiation was found connecting them.
 | Installer → local activation journal | Root filesystem permissions | Installation ID, stage, revision and sanitised error | Atomic local writes and recovery; no central copy |
 | Customer API → activation state | Local read-only mount | Installer-owned projection | Returns 503 if unavailable; no remote reporting |
 | Customer → community service | No verified remote connection | Customer route currently writes local records | No central destination, retry or version contract found |
-| Customer VPS → central health/licensing | Not implemented | No payload/source | Unknown, not healthy |
+| Customer VPS → central activation/heartbeat | Approved contract only; no caller found in inspected source | Existing installer credential, registered installation key, short-lived JWT and signed requests are the approved model | Runtime/report delivery unknown; no parallel reporting credential is proposed |
+| Customer VPS → central health/licensing | No verified caller in inspected source | Approved heartbeat/status contract is the intended source | Unknown, never inferred as healthy |
 | Stripe → central API | Stripe webhook signature | Subscription/payment state | Central PostgreSQL and idempotent event handling |
 | Owner Portal → central API | Owner password + TOTP | Central customer, billing, feedback, communications and finance records | Central-only; no VPS query |
 
@@ -148,7 +173,7 @@ services by default.
 | Customer identity/status | Central `Customer` model | Available |
 | Subscription/payment | Central Customer + Stripe records | Available when configured |
 | Installation association | `Customer.installation_id` → `CommunityInstallation` | Partial/manual |
-| Installation last seen | `CommunityInstallation.last_seen_at` | Misleading: updated by community submissions, not heartbeat |
+| Installation last seen | `CommunityInstallation.last_seen_at` | Misleading in current source: updated by community submissions, not an implemented activation heartbeat |
 | Running version, health and update state | None | Unknown |
 | Activation/onboarding stage | Local activation journal | VPS-private/unavailable centrally |
 | MFA configured | Local `CustomerMfaState` | VPS-private/unavailable centrally |
@@ -179,15 +204,21 @@ states rather than treating missing data as healthy:
 
 ## I. Prioritised gaps and risks
 
-### P1 — No dependable VPS-to-central service contract
+### P1 — No implemented VPS-to-central service reporting path
 
-Owner cannot reliably know whether a customer installation is active, current,
-healthy, blocked at activation, MFA-configured or offline.
+**Verified source:** Owner cannot currently obtain dependable installation
+activity, version, health, activation, MFA-status or offline state from a
+customer reporter. **Approved design:** heartbeat and MFA-status endpoints
+already exist in the activation contract. **Runtime unknown:** this report does
+not claim that every live installation lacks the approved service.
 
-### P1 — Customer and installation identities are not fully interlocked
+### P1 — Customer and installation identities are not fully interlocked in inspected source
 
-The Auth API knows an installer token’s `customer_id`, but the generated local
-configuration does not establish a durable central Customer association.
+The Auth API knows an installer token’s `customer_id`, while the inspected
+customer installer currently creates a local installation identity/journal but
+does not call the approved activation bootstrap. The approved contract already
+defines the missing bridge; implementation and runtime association remain
+unverified.
 
 ### P1 — Installer/application configuration drift
 
@@ -230,86 +261,114 @@ The installer README records no automatic backups and HTTP-only operation as
 current limitations:
 [`README.md`](https://github.com/ibettison/laymatched-install/blob/1a7328dc89a1b11b9e3dfe838f2dcb223b0f7562/README.md#L203-L208)
 
-## J. Recommended first interlocking implementation slice
+## J. Reconciled first implementation and staged delivery
 
-Implement a bounded, one-way, versioned customer service-state report.
+The first local engineering change is configuration parity, not a new service
+contract. The separately maintained installer currently does not provision or
+pass `AUTH_MFA_ENCRYPTION_KEY`, while the application requires it for durable
+customer MFA. This must be corrected before relying on upgrades. It is separate
+from PR #25 documentation and does not change MFA cryptography or activation
+semantics.
 
-### Customer outcome
+The approved activation contract already supplies the identity and transport for
+future service-state reporting:
 
-The customer application remains fully functional if central services are
-unavailable. Only minimal installation/service state is shared.
+- existing installer credential for bootstrap;
+- registered Ed25519 installation key;
+- short-lived activation JWT;
+- signed requests with timestamp and nonce;
+- existing heartbeat endpoint for version/health observations;
+- existing status-only MFA endpoint for local MFA state.
 
-### Minimum proposed contract
+No new per-installation reporting credential should be introduced. Any new
+fields such as schema revision, activation stage, update state or sanitised
+failure category require a reviewed contract revision and architecture gate.
 
-```json
-{
-  "contract_version": 1,
-  "installation_id": "...",
-  "application_version": "...",
-  "schema_revision": "...",
-  "activation_stage": "active",
-  "api_health": "healthy",
-  "web_health": "healthy",
-  "mfa_configured": true,
-  "update_state": "current",
-  "reported_at": "...",
-  "failure_code": null
-}
-```
+### Stage 1 — installer/application MFA configuration parity
 
-Safeguards:
+- **Owner:** `laymatched-install`.
+- **Scope:** generate a dedicated durable key once when absent, validate existing
+  values, preserve it through reruns/upgrades, pass it only to the customer API
+  through both generated Compose paths, and fail closed before deployment on
+  malformed/duplicate configuration.
+- **Prerequisite:** current application configuration contract; no application
+  code or cryptography change.
+- **Acceptance:** fresh install, legacy upgrade, repeated run, existing key,
+  malformed/duplicate key, mode `600`, Compose rendering, and no secret logging.
+- **Recovery:** never replace a valid key; stop before pull/restart on invalid
+  configuration; retain the old deployment and configuration for inspection.
 
-- per-installation credential provisioned during installation;
-- TLS, replay/idempotency protection and explicit contract versioning;
-- no passwords, TOTP secrets, balances, bets, odds, stakes, P/L or credentials;
-- stale reports become `UNKNOWN`;
-- customer core operation does not depend synchronously on central availability;
-- bounded local retry/outbox contains no sensitive payloads.
+### Stage 2 — activation-contract fixture/status extension
 
-### Owner outcome
+- **Owner:** shared contract in `laymatched-install`, with a pinned fixture in
+  the application repository if required.
+- **Scope:** use the existing heartbeat/status endpoints; add only the minimum
+  reviewed fields and explicit freshness/unknown semantics.
+- **Prerequisite:** activation architecture gate and Stage 1.
+- **Acceptance:** schema, backward compatibility, forbidden private fields,
+  unsupported-version rejection, and stale-state fixtures.
+- **Recovery:** unsupported contract versions fail closed; no customer runtime
+  dependency on central availability.
 
-Owner Portal can show current/unknown service state, last report, application
-and schema version, activation stage, MFA-configured boolean, sanitised failure
-category and update state.
+### Stage 3 — central receiver and authoritative persistence
 
-### Dependencies
+- **Owner:** `layMatchedBetting` central application.
+- **Scope:** implement the approved authenticated heartbeat/status path,
+  installation/customer association, idempotency, replay protection, retention
+  and Owner-safe read state.
+- **Prerequisite:** Stage 2 and the approved central identity bridge.
+- **Acceptance:** valid, duplicate, wrong-installation, replay, revoked, stale
+  and privacy-boundary tests.
+- **Recovery:** invalid reports are rejected without partial state; central
+  outage does not block the customer application.
 
-1. Central installation/customer association.
-2. Versioned contract fixture shared by both repositories.
-3. Central persistence and authenticated endpoint.
-4. Installer provisioning and preservation of the reporting credential.
-5. Customer-local reporter and retry policy.
-6. Owner read model with explicit stale/unknown semantics.
+### Stage 4 — customer local reporter/outbox
 
-### Acceptance tests
+- **Owner:** `layMatchedBetting` customer application plus any approved local
+  installer integration.
+- **Scope:** collect only approved local state, sign requests, report via the
+  local backend, and use bounded retry/outbox handling.
+- **Prerequisite:** Stage 3 endpoint and generated/mock client.
+- **Acceptance:** offline operation, retry/backoff, deduplication, redaction,
+  bounded storage and no betting, balance, credential or MFA-secret payloads.
+- **Recovery:** failed reports remain `UNKNOWN` centrally and never block local
+  core use.
 
-- Fresh installation registers once.
-- Repeated identical reports are idempotent.
-- Valid state appears in Owner Portal.
-- Stale state becomes `UNKNOWN`.
-- Customer core application remains usable while central is offline.
-- Wrong installation, replay, invalid signature and unsupported versions fail.
-- No private betting or authentication data appears in transmitted payloads.
-- Upgrade preserves installation identity and reporting credential.
-- Customer and central artifacts remain unable to access one another’s Owner routes.
+### Stage 5 — Owner operational read model
 
-### Future repository/branch plan
+- **Owner:** `layMatchedBetting` central application.
+- **Scope:** show current, stale, missing and revoked installation state without
+  treating absent data as healthy.
+- **Prerequisite:** Stage 3 persisted state and agreed freshness policy.
+- **Acceptance:** fresh/stale/missing/revoked/contradictory state tests and
+  privacy/authorization checks.
+- **Recovery:** missing or stale data is visibly `UNKNOWN`; no inferred health.
 
-No implementation branch or PR existed before this report. A later bounded
-sequence could use:
+### Safe MFA and migration acceptance plan
 
-1. `laymatched-install`: contract fixture, credential provisioning and
-   preservation.
-2. `layMatchedBetting`: central endpoint, customer reporter, persistence and
-   Owner read model.
-3. Coordinated independent exact-SHA review across both repositories.
+Use a disposable VM/container harness with mocked Auth API, registry and Docker:
+
+1. Missing key generates once, is mode `600`, and is never printed.
+2. A second update preserves the exact key; an existing valid key is unchanged.
+3. Duplicate/malformed/unsafe values fail closed before deployment.
+4. Both generated Compose paths pass the key only to the customer API.
+5. Disposable PostgreSQL applies `0032 -> 0033`, restarts with the unchanged MFA
+   key, and decrypts a test secret; changing only `AUTH_SESSION_SECRET` does not
+   break decryption.
+6. An incompatible rollback restores the pre-update database snapshot before
+   old application images restart.
+
+No live installation or customer data is required for these tests.
 
 ## Validation and stop status
 
-Read-only repository/source inspection was performed with Git, `rg`, `git show`,
-route inspection and cached PR/PAD metadata. No tests, builds, deployments,
-production queries or live-service checks were run because this was explicitly
-discovery-only.
+Repository/source inspection was performed with Git and `rg`; the existing
+activation contract suite passed **19/19**. Shell syntax checks for both
+installer repositories passed. No live services, production queries or
+customer data were accessed.
 
-SC-01 discovery is complete. No application code, production configuration or
-live customer data was changed.
+This report revision changes documentation only. The first engineering change
+described in Stage 1 was not implemented in this checkout because the checkout
+is already the PR #25 documentation branch and branch/worktree switching or a
+new worktree was not authorised. PR #25 remains documentation-only and its
+branch has not been updated in this work.
