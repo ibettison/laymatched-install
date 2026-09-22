@@ -154,10 +154,11 @@ the approved owner access path:
 
 ```bash
 APP_VERSION=$(sudo awk -F= '$1=="APP_VERSION"{print substr($0,index($0,"=")+1)}' /opt/laymatched/.env)
-sudo python3 /opt/laymatched/recognition_client.py heartbeat \\
-  --state-dir /var/lib/laymatched/activation \\
+sudo python3 /opt/laymatched/recognition_client.py \\
   --central-url https://<central-recognition-base> \\
-  --app-version "$APP_VERSION" --service-status unknown
+  --state-dir /var/lib/laymatched/activation \\
+  --app-version "$APP_VERSION" \\
+  heartbeat --service-status unknown
 # Query the owner installation-recognition status for this installation ID.
 ```
 

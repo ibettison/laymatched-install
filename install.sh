@@ -134,8 +134,9 @@ raise SystemExit(0 if value.get("source") == "customer_mfa_database" and value.g
 
 complete_central_activation() {
     local status_json profile_complete
-    status_json=$(python3 /opt/laymatched/provisioning-current/recognition_client.py status \
-        --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION") || \
+    status_json=$(python3 /opt/laymatched/provisioning-current/recognition_client.py \
+        --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION" \
+        status) || \
         log_error "Could not read central activation status before profile completion."
     profile_complete=$(printf '%s' "$status_json" | python3 -c 'import json,sys; print("true" if json.load(sys.stdin).get("profile", {}).get("complete") else "false")')
     if [ "$profile_complete" != "true" ]; then
@@ -146,20 +147,23 @@ complete_central_activation() {
         if [ -z "$CUSTOMER_FULL_NAME" ] || [ -z "$CUSTOMER_TOWN_CITY" ] || ! printf '%s' "$CUSTOMER_COUNTRY_CODE" | grep -Eq '^[A-Z]{2}$'; then
             log_error "A valid full name, town/city and two-letter country code are required."
         fi
-        python3 /opt/laymatched/provisioning-current/recognition_client.py report-profile \
+        python3 /opt/laymatched/provisioning-current/recognition_client.py \
             --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION" \
+            report-profile \
             --full-name "$CUSTOMER_FULL_NAME" --town-city "$CUSTOMER_TOWN_CITY" --country-code "$CUSTOMER_COUNTRY_CODE" >/dev/null || \
             log_error "Central customer profile reporting failed; activation remains incomplete."
     fi
     python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance profile_pending >/dev/null
     wait_for_local_mfa
-    python3 /opt/laymatched/provisioning-current/recognition_client.py report-mfa \
+    python3 /opt/laymatched/provisioning-current/recognition_client.py \
         --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION" \
+        report-mfa \
         --compose-dir /opt/laymatched >/dev/null || \
         log_error "Central MFA status reporting failed; activation remains incomplete."
     python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance mfa_pending >/dev/null
-    python3 /opt/laymatched/provisioning-current/recognition_client.py complete \
-        --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION" >/dev/null || \
+    python3 /opt/laymatched/provisioning-current/recognition_client.py \
+        --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION" \
+        complete >/dev/null || \
         log_error "Central activation completion failed; the private application remains pending."
     python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance active >/dev/null
     log_info "Central activation completed after verified local MFA."
@@ -232,9 +236,10 @@ elif [ -n "$api_status" ] || [ -n "$web_status" ]; then
 fi
 
 exec /usr/bin/flock -n -E 76 /run/laymatched-recognition-heartbeat.lock \
-    /usr/bin/python3 /opt/laymatched/provisioning-current/recognition_client.py heartbeat \
-    --state-dir "$STATE_DIR" --central-url "$central_url" \
-    --app-version "$app_version" --service-status "$service_status"
+    /usr/bin/python3 /opt/laymatched/provisioning-current/recognition_client.py \
+    --central-url "$central_url" --state-dir "$STATE_DIR" \
+    --app-version "$app_version" heartbeat \
+    --service-status "$service_status"
 HEARTBEAT_RUNNER_EOF
     chown root:root /opt/laymatched/recognition-heartbeat.sh
     chmod 755 /opt/laymatched/recognition-heartbeat.sh
@@ -1000,9 +1005,10 @@ if [ "${CONFIG_ALREADY_PROVIDED}" = "false" ] || [ -z "${CUSTOMER_HOSTNAME:-}" ]
     python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance authorized >/dev/null
     python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance nickname_reserved >/dev/null
     python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance dns_pending >/dev/null
-    reservation_json=$(python3 /opt/laymatched/provisioning-current/recognition_client.py reserve-hostname \
+    reservation_json=$(python3 /opt/laymatched/provisioning-current/recognition_client.py \
         --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" \
-        --app-version "$APP_VERSION" --nickname "$CUSTOMER_NICKNAME" --public-ip "$public_ipv4" \
+        --app-version "$APP_VERSION" reserve-hostname \
+        --nickname "$CUSTOMER_NICKNAME" --public-ip "$public_ipv4" \
         --challenge-root /var/www/letsencrypt) || \
         log_error "Customer hostname reservation/DNS readiness failed. Retry after resolving the reported central state."
     CUSTOMER_HOSTNAME=$(printf '%s' "$reservation_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hostname"])')
@@ -1025,15 +1031,17 @@ if [ -n "${CUSTOMER_HOSTNAME:-}" ]; then
         /bin/bash /opt/laymatched/provisioning-current/configure-customer-https.sh "$CUSTOMER_HOSTNAME"
     python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance https_pending >/dev/null
     if [ "${LAYMATCHED_ACME_MODE:-real}" != "mock" ]; then
-        python3 /opt/laymatched/provisioning-current/recognition_client.py report-https \
+        python3 /opt/laymatched/provisioning-current/recognition_client.py \
             --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" \
-            --app-version "$APP_VERSION" --hostname "$CUSTOMER_HOSTNAME" \
+            --app-version "$APP_VERSION" report-https \
+            --hostname "$CUSTOMER_HOSTNAME" \
             --certificate "/etc/letsencrypt/live/$CUSTOMER_HOSTNAME/cert.pem" \
             --challenge-root /var/www/letsencrypt >/dev/null || \
             log_error "Central HTTPS verification failed; the installation remains pending and must be retried safely."
         complete_central_activation
     fi
 fi
+
 install_recognition_scheduler
 
 # -- Post-health persistence (rerun only) -----------------------------------

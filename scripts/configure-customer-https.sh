@@ -243,9 +243,10 @@ nginx -t && systemctl reload nginx
 central_url="\$(sed -n 's/^ACTIVATION_SERVICE_URL=//p' /etc/laymatched/recognition.env 2>/dev/null || true)"
 app_version="\$(sed -n 's/^APP_VERSION=//p' /opt/laymatched/.env 2>/dev/null || true)"
 if [ -n "\$central_url" ] && [ -n "\$app_version" ] && [ -x /opt/laymatched/provisioning-current/recognition_client.py ]; then
-    exec /usr/bin/python3 /opt/laymatched/provisioning-current/recognition_client.py report-https \\
-        --state-dir /var/lib/laymatched/activation --central-url "\$central_url" \\
-        --app-version "\$app_version" --hostname "$hostname" \\
+    exec /usr/bin/python3 /opt/laymatched/provisioning-current/recognition_client.py \\
+        --central-url "\$central_url" --state-dir /var/lib/laymatched/activation \\
+        --app-version "\$app_version" report-https \\
+        --hostname "$hostname" \\
         --certificate /etc/letsencrypt/live/$hostname/cert.pem \\
         --challenge-root "$challenge_root"
 fi
