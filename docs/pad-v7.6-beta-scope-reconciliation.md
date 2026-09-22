@@ -2549,8 +2549,9 @@ this work.
 
 - PR: [#37](https://github.com/ibettison/laymatched-install/pull/37),
   separate from merged PR #36; **OPEN / MERGEABLE**.
-- Head: `154d4005d3d763d5fe2de0d7fc557e647f6cc56d` on
-  `fix/customer-https-tls-support`, targeting `main`.
+- HTTPS implementation commit: `154d4005d3d763d5fe2de0d7fc557e647f6cc56d` on
+  `fix/customer-https-tls-support`, targeting `main`; the PR also includes a
+  follow-up PAD metadata commit.
 - Changed files: `scripts/configure-customer-https.sh`, `update.sh`,
   `tests/test_customer_dns_https.py`, and this section.
 - `tests/test_customer_dns_https.py` and
