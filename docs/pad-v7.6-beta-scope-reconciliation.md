@@ -2548,10 +2548,12 @@ this work.
 ### Release and verification
 
 - PR: [#37](https://github.com/ibettison/laymatched-install/pull/37),
-  separate from merged PR #36; **OPEN / MERGEABLE**.
+  separate from merged PR #36; **MERGED**.
 - HTTPS implementation commit: `154d4005d3d763d5fe2de0d7fc557e647f6cc56d` on
   `fix/customer-https-tls-support`, targeting `main`; the PR also includes a
   follow-up PAD metadata commit.
+- Merge commit and resulting `main` SHA:
+  `f354bbb9a11f692bd1d6cfb84a28886f45767fa7`.
 - Changed files: `scripts/configure-customer-https.sh`, `update.sh`,
   `tests/test_customer_dns_https.py`, and this section.
 - `tests/test_customer_dns_https.py` and
@@ -2561,8 +2563,11 @@ this work.
 - `git diff --check`: **passed**.
 - Embedded updater helper fallback reproducibility and byte comparison:
   **passed** as part of the DNS/HTTPS suite.
-- **MERGED:** NO — PR #37 is awaiting required checks/review.
-- **DEPLOYED ON FASTHOSTS:** NO.
+- **MERGED:** YES — PR #37 merged after the focused checks passed.
+- **DEPLOYED ON FASTHOSTS:** NO — this installer repository has no documented
+  Fasthosts deployment workflow or target path. Its documented Fasthosts
+  deployment process belongs to the separate application repository; applying
+  this installer change there would not update the installer safely.
 - **AWS CUSTOMER VPS:** NOT ACCESSED OR MODIFIED. Safe update-and-resume
-  commands will be recorded in the work review; the operator must run them on
-  the customer VPS after the merged fix is available.
+  commands are provided in the work review for the operator to run after the
+  merged fix is available.
