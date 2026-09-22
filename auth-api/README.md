@@ -219,6 +219,7 @@ Required GitHub Secrets:
 | `DB_PATH` | /data/auth-tokens.db | SQLite database path |
 | `APPROVED_VERSION_PATH` | `/data/approved_version.txt` | Trusted approved release record; installer authorization and registry pull-token issuance fail closed when missing, empty, or invalid |
 | `REGISTRY_URL` | registry.matched.laysports.co.uk | Registry hostname |
+| `ACTIVATION_SERVICE_URL` | empty | Central activation API URL returned to installers; production is `https://matched.laysports.co.uk` and must be configured before DNS/HTTPS onboarding |
 | `PRIVATE_KEY_PATH` | /data/private.pem | RSA private key |
 | `PUBLIC_KEY_PATH` | /data/public.pem | RSA public key |
 | `RATE_LIMIT_PER_MIN` | 50 | Auth API rate limit per IP |

@@ -104,6 +104,67 @@ generate_secret() {
     fi
 }
 
+read_local_mfa_status() {
+    (cd /opt/laymatched && docker compose exec -T api python3 -m app.customer_activation_status)
+}
+
+wait_for_local_mfa() {
+    local wait_seconds="${ACTIVATION_MFA_WAIT_SECONDS:-900}"
+    local elapsed=0
+    local status_json
+    log_info "Open https://${CUSTOMER_HOSTNAME}/, sign in, and complete Authenticator protection."
+    log_info "The installer will continue only after the customer API confirms verified MFA and recovery codes."
+    while [ "$elapsed" -lt "$wait_seconds" ]; do
+        status_json=$(read_local_mfa_status 2>/dev/null || true)
+        if printf '%s' "$status_json" | python3 -c '
+import json, sys
+try:
+    value = json.loads(sys.stdin.read().strip().splitlines()[-1])
+except (json.JSONDecodeError, IndexError):
+    raise SystemExit(1)
+raise SystemExit(0 if value.get("source") == "customer_mfa_database" and value.get("enabled") and value.get("verified_at") and value.get("recovery_codes_generated") else 1)
+'; then
+            return 0
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    log_error "Verified local MFA was not completed within ${wait_seconds}s. No central activation completion was attempted."
+}
+
+complete_central_activation() {
+    local status_json profile_complete
+    status_json=$(python3 /opt/laymatched/provisioning-current/recognition_client.py status \
+        --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION") || \
+        log_error "Could not read central activation status before profile completion."
+    profile_complete=$(printf '%s' "$status_json" | python3 -c 'import json,sys; print("true" if json.load(sys.stdin).get("profile", {}).get("complete") else "false")')
+    if [ "$profile_complete" != "true" ]; then
+        read -r -p "Your full name: " CUSTOMER_FULL_NAME
+        read -r -p "Your town or city: " CUSTOMER_TOWN_CITY
+        read -r -p "Your two-letter country code (for example GB): " CUSTOMER_COUNTRY_CODE
+        CUSTOMER_COUNTRY_CODE=$(printf '%s' "$CUSTOMER_COUNTRY_CODE" | tr '[:lower:]' '[:upper:]')
+        if [ -z "$CUSTOMER_FULL_NAME" ] || [ -z "$CUSTOMER_TOWN_CITY" ] || ! printf '%s' "$CUSTOMER_COUNTRY_CODE" | grep -Eq '^[A-Z]{2}$'; then
+            log_error "A valid full name, town/city and two-letter country code are required."
+        fi
+        python3 /opt/laymatched/provisioning-current/recognition_client.py report-profile \
+            --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION" \
+            --full-name "$CUSTOMER_FULL_NAME" --town-city "$CUSTOMER_TOWN_CITY" --country-code "$CUSTOMER_COUNTRY_CODE" >/dev/null || \
+            log_error "Central customer profile reporting failed; activation remains incomplete."
+    fi
+    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance profile_pending >/dev/null
+    wait_for_local_mfa
+    python3 /opt/laymatched/provisioning-current/recognition_client.py report-mfa \
+        --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION" \
+        --compose-dir /opt/laymatched >/dev/null || \
+        log_error "Central MFA status reporting failed; activation remains incomplete."
+    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance mfa_pending >/dev/null
+    python3 /opt/laymatched/provisioning-current/recognition_client.py complete \
+        --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION" >/dev/null || \
+        log_error "Central activation completion failed; the private application remains pending."
+    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance active >/dev/null
+    log_info "Central activation completed after verified local MFA."
+}
+
 install_recognition_scheduler() {
     local config_file="/etc/laymatched/recognition.env"
     local existing_url=""
@@ -171,7 +232,7 @@ elif [ -n "$api_status" ] || [ -n "$web_status" ]; then
 fi
 
 exec /usr/bin/flock -n -E 76 /run/laymatched-recognition-heartbeat.lock \
-    /usr/bin/python3 /opt/laymatched/recognition_client.py heartbeat \
+    /usr/bin/python3 /opt/laymatched/provisioning-current/recognition_client.py heartbeat \
     --state-dir "$STATE_DIR" --central-url "$central_url" \
     --app-version "$app_version" --service-status "$service_status"
 HEARTBEAT_RUNNER_EOF
@@ -239,6 +300,14 @@ validate_registry_url() {
         "") return 1 ;;
         *) return 0 ;;
     esac
+}
+
+validate_activation_url() {
+    case "$1" in
+        https://*) ;;
+        *) return 1 ;;
+    esac
+    ! printf '%s' "$1" | grep -q '[[:space:]]'
 }
 
 AUTH_RESPONSE_DIR=""
@@ -313,6 +382,13 @@ print(json.dumps({"installer_token": sys.argv[1]}))
     REGISTRY_TOKEN=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_token', ''))")
     APPROVED_VERSION=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('approved_version', ''))")
     REGISTRY_URL=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_url', ''))")
+    AUTH_ACTIVATION_SERVICE_URL=$(echo "${response}" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('activation_url') or data.get('activation_service_url') or '')")
+    if [ -n "${AUTH_ACTIVATION_SERVICE_URL}" ]; then
+        if ! validate_activation_url "${AUTH_ACTIVATION_SERVICE_URL}"; then
+            log_error "Invalid activation service URL from authorization service."
+        fi
+        ACTIVATION_SERVICE_URL="${AUTH_ACTIVATION_SERVICE_URL}"
+    fi
 
     if [ -z "${REGISTRY_TOKEN}" ] || [ -z "${APPROVED_VERSION}" ] || [ -z "${REGISTRY_URL}" ]; then
         log_error "Invalid response from authorization service. Token may be invalid or expired."
@@ -490,6 +566,12 @@ INSTALLATION_ID=$(tr -d '\r\n' < "$INSTALLATION_ID_FILE")
 python3 "$SCRIPT_DIR/tools/local_activation.py" --state-dir "$ACTIVATION_STATE_DIR" init "$INSTALLATION_ID" > /dev/null
 install -o root -g root -m 0755 "$SCRIPT_DIR/tools/local_activation.py" /opt/laymatched/local_activation.py
 install -o root -g root -m 0755 "$SCRIPT_DIR/tools/recognition_client.py" /opt/laymatched/recognition_client.py
+install -o root -g root -m 0755 "$SCRIPT_DIR/tools/customer_hostname.py" /opt/laymatched/customer_hostname.py
+install -o root -g root -m 0755 "$SCRIPT_DIR/scripts/configure-customer-https.sh" /opt/laymatched/configure-customer-https.sh
+# Fresh installs use the same atomic helper pointer as upgrades. The initial
+# pointer targets the install root until the updater publishes its first
+# versioned helper bundle.
+ln -sfn /opt/laymatched /opt/laymatched/provisioning-current
 log_info "Local activation state initialized for resumable installation."
 
 # -- Safe rerun: skip config if already provided ---------------------------
@@ -505,6 +587,9 @@ if [ -f /opt/laymatched/.env ]; then
     APP_VERSION=$(grep '^APP_VERSION=' /opt/laymatched/.env | cut -d'=' -f2-)
     # Load REGISTRY_URL if present (legacy .env may not have it)
     REGISTRY_URL=$(grep '^REGISTRY_URL=' /opt/laymatched/.env | cut -d'=' -f2-)
+    ACTIVATION_SERVICE_URL=$(grep '^ACTIVATION_SERVICE_URL=' /opt/laymatched/.env | cut -d'=' -f2- || true)
+    CUSTOMER_NICKNAME=$(grep '^CUSTOMER_NICKNAME=' /opt/laymatched/.env | cut -d'=' -f2- || true)
+    CUSTOMER_HOSTNAME=$(grep '^CUSTOMER_HOSTNAME=' /opt/laymatched/.env | cut -d'=' -f2- || true)
 fi
 
 if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
@@ -523,6 +608,14 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     # Call Auth API to get registry credentials and approved version
     call_auth_api "$INSTALLER_TOKEN"
     APP_VERSION="${APPROVED_VERSION}"
+    if [ -z "${AUTH_ACTIVATION_SERVICE_URL:-}" ]; then
+        log_error "Authorization service did not provide the customer activation service URL. Installation cannot provision a private hostname safely."
+    fi
+    ACTIVATION_SERVICE_URL="${AUTH_ACTIVATION_SERVICE_URL}"
+    read -r -p "Choose your LayMatched customer nickname (3-32 lowercase letters, numbers or internal hyphens): " CUSTOMER_NICKNAME_INPUT
+    CUSTOMER_NICKNAME=$(python3 "$SCRIPT_DIR/tools/customer_hostname.py" "$CUSTOMER_NICKNAME_INPUT" | sed 's/\.matched\.laysports\.co\.uk$//') || \
+        log_error "Invalid customer nickname. Use 3-32 lowercase letters, numbers or internal hyphens."
+    CUSTOMER_HOSTNAME="${CUSTOMER_NICKNAME}.matched.laysports.co.uk"
 
     # Prompt for LayMatched login credentials (matches backend/scripts/create_credentials.py)
     # Collect Login ID in outer scope
@@ -579,6 +672,9 @@ AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET}
 AUTH_SESSION_HOURS=${AUTH_SESSION_HOURS:-24}
 COMMUNITY_INSTALLATION_KEY=${COMMUNITY_INSTALLATION_KEY}
 COMMUNITY_ATTRIBUTION_SECRET=${COMMUNITY_ATTRIBUTION_SECRET}
+ACTIVATION_SERVICE_URL=${ACTIVATION_SERVICE_URL}
+CUSTOMER_NICKNAME=${CUSTOMER_NICKNAME}
+CUSTOMER_HOSTNAME=
 EOF
     bash "$SCRIPT_DIR/scripts/ensure-mfa-encryption-key.sh" /opt/laymatched/.env || \
         log_error "MFA encryption configuration could not be created."
@@ -739,6 +835,12 @@ else
     log_info "Nginx already present; skipping package installation."
 fi
 
+if [ "${LAYMATCHED_ACME_MODE:-real}" != "mock" ] && ! command -v certbot > /dev/null 2>&1; then
+    log_info "Installing Certbot for customer HTTPS and automatic renewal..."
+    apt-get update
+    apt-get install -y certbot
+fi
+
 # Create LayMatched Nginx site configuration
 cat > /etc/nginx/sites-available/laymatched <<'NGINX_EOF'
 server {
@@ -751,21 +853,16 @@ server {
     add_header Referrer-Policy "strict-origin-when-cross-origin";
 
     location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        return 503 "LayMatched activation pending\n";
+    }
 
-        # WebSocket support
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+    }
 
-        # Timeouts
-        proxy_connect_timeout 30s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
+    location /.well-known/laymatched-network/ {
+        root /var/www/letsencrypt;
+        default_type text/plain;
     }
 
     # Health endpoint for load balancer checks
@@ -860,15 +957,68 @@ else
     log_error "Health check timeout reached after $MAX_WAIT seconds. LayMatched Web is not responding. Check container logs with: docker logs -f laymatched-web"
 fi
 
-# Optional central recognition is deliberately offline-safe. The installer
-# credential is piped to the Auth API assertion bridge and is never sent to
-# the central application or persisted. No central URL means local operation
-# remains unchanged.
-if [ -n "$ACTIVATION_SERVICE_URL" ] && [ -n "${INSTALLER_TOKEN:-}" ]; then
+# Reserve the customer hostname only after the customer API is healthy. The
+# central service owns nickname uniqueness and DNS credentials; the VPS only
+# receives the assigned hostname and a local certificate.
+if [ "${CONFIG_ALREADY_PROVIDED}" = "false" ] || [ -z "${CUSTOMER_HOSTNAME:-}" ]; then
+    if [ -z "${ACTIVATION_SERVICE_URL:-}" ]; then
+        log_error "Customer activation service URL is missing; refusing to expose an unowned hostname."
+    fi
+    if [ -z "${CUSTOMER_NICKNAME:-}" ]; then
+        read -r -p "Choose your LayMatched customer nickname (3-32 lowercase letters, numbers or internal hyphens): " CUSTOMER_NICKNAME_INPUT
+        CUSTOMER_NICKNAME=$(python3 /opt/laymatched/provisioning-current/customer_hostname.py "$CUSTOMER_NICKNAME_INPUT" | sed 's/\.matched\.laysports\.co\.uk$//') || \
+            log_error "Invalid customer nickname. Use 3-32 lowercase letters, numbers or internal hyphens."
+    fi
+    CUSTOMER_HOSTNAME="${CUSTOMER_NICKNAME}.matched.laysports.co.uk"
+    LAYMATCHED_INSTALLER_DIR=/opt/laymatched \
+        /bin/bash /opt/laymatched/provisioning-current/configure-customer-https.sh \
+        --network-only "$CUSTOMER_HOSTNAME" \
+        || log_error "Could not prepare the temporary public-IP challenge listener."
+    public_ipv4="${CUSTOMER_PUBLIC_IPV4:-}"
+    if [ -z "$public_ipv4" ]; then
+        public_ipv4=$(curl -4fsS --max-time 15 https://api.ipify.org) || \
+            log_error "Unable to determine the VPS public IPv4 address. Set CUSTOMER_PUBLIC_IPV4 and rerun safely."
+    fi
     ACTIVATION_ASSERTION_URL="${AUTH_API_URL%/installer/authorize}/activation/assertions"
-    if ! printf '%s' "$INSTALLER_TOKEN" | python3 /opt/laymatched/recognition_client.py bootstrap \
+    if ! printf '%s' "$INSTALLER_TOKEN" | python3 /opt/laymatched/provisioning-current/recognition_client.py bootstrap \
         --auth-url "$ACTIVATION_ASSERTION_URL" --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION"; then
-        log_warn "Central recognition unavailable; local LayMatched operation is unchanged. Retry recognition after connectivity is restored."
+        log_error "Central activation could not authenticate this installation; no customer hostname was provisioned."
+    fi
+    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance authorized >/dev/null
+    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance nickname_reserved >/dev/null
+    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance dns_pending >/dev/null
+    reservation_json=$(python3 /opt/laymatched/provisioning-current/recognition_client.py reserve-hostname \
+        --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" \
+        --app-version "$APP_VERSION" --nickname "$CUSTOMER_NICKNAME" --public-ip "$public_ipv4" \
+        --challenge-root /var/www/letsencrypt) || \
+        log_error "Customer hostname reservation/DNS readiness failed. Retry after resolving the reported central state."
+    CUSTOMER_HOSTNAME=$(printf '%s' "$reservation_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hostname"])')
+    CUSTOMER_NICKNAME=$(printf '%s' "$reservation_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["nickname"])')
+    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance dns_ready >/dev/null
+    if grep -q '^CUSTOMER_NICKNAME=' /opt/laymatched/.env; then
+        sed -i "s|^CUSTOMER_NICKNAME=.*|CUSTOMER_NICKNAME=${CUSTOMER_NICKNAME}|" /opt/laymatched/.env
+    else
+        printf 'CUSTOMER_NICKNAME=%s\n' "$CUSTOMER_NICKNAME" >> /opt/laymatched/.env
+    fi
+    if grep -q '^CUSTOMER_HOSTNAME=' /opt/laymatched/.env; then
+        sed -i "s|^CUSTOMER_HOSTNAME=.*|CUSTOMER_HOSTNAME=${CUSTOMER_HOSTNAME}|" /opt/laymatched/.env
+    else
+        printf 'CUSTOMER_HOSTNAME=%s\n' "$CUSTOMER_HOSTNAME" >> /opt/laymatched/.env
+    fi
+fi
+
+if [ -n "${CUSTOMER_HOSTNAME:-}" ]; then
+    LAYMATCHED_INSTALLER_DIR=/opt/laymatched \
+        /bin/bash /opt/laymatched/provisioning-current/configure-customer-https.sh "$CUSTOMER_HOSTNAME"
+    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance https_pending >/dev/null
+    if [ "${LAYMATCHED_ACME_MODE:-real}" != "mock" ]; then
+        python3 /opt/laymatched/provisioning-current/recognition_client.py report-https \
+            --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" \
+            --app-version "$APP_VERSION" --hostname "$CUSTOMER_HOSTNAME" \
+            --certificate "/etc/letsencrypt/live/$CUSTOMER_HOSTNAME/cert.pem" \
+            --challenge-root /var/www/letsencrypt >/dev/null || \
+            log_error "Central HTTPS verification failed; the installation remains pending and must be retried safely."
+        complete_central_activation
     fi
 fi
 

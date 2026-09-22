@@ -52,6 +52,7 @@ type Config struct {
 	DBPath                string
 	ApprovedVersionPath   string
 	RegistryURL           string
+	ActivationURL         string
 	PrivateKeyPath        string
 	PublicKeyPath         string
 	RegistryPublicKeyPath string
@@ -94,6 +95,7 @@ type AuthorizeResponse struct {
 	RegistryToken   string `json:"registry_token"`
 	ApprovedVersion string `json:"approved_version"`
 	RegistryURL     string `json:"registry_url"`
+	ActivationURL   string `json:"activation_url,omitempty"`
 }
 
 type ActivationAssertionRequest struct {
@@ -259,6 +261,7 @@ func loadConfig() Config {
 		DBPath:                getEnv("DB_PATH", "/data/auth-tokens.db"),
 		ApprovedVersionPath:   getEnv("APPROVED_VERSION_PATH", "/data/approved_version.txt"),
 		RegistryURL:           getEnv("REGISTRY_URL", "registry.matched.laysports.co.uk"),
+		ActivationURL:         getEnv("ACTIVATION_SERVICE_URL", ""),
 		PrivateKeyPath:        getEnv("PRIVATE_KEY_PATH", "/data/private.pem"),
 		PublicKeyPath:         getEnv("PUBLIC_KEY_PATH", "/data/public.pem"),
 		RegistryPublicKeyPath: getEnv("REGISTRY_PUBLIC_KEY_PATH", "/data/auth-public.pem"),
@@ -766,6 +769,7 @@ func authorizeHandler(c *gin.Context) {
 		RegistryToken:   req.InstallerToken,
 		ApprovedVersion: approved,
 		RegistryURL:     cfg.RegistryURL,
+		ActivationURL:   cfg.ActivationURL,
 	}
 
 	logRequest(c, http.StatusOK, tokenPrefix, "authorization successful")

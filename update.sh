@@ -17,6 +17,8 @@ log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
 ACTIVATION_SERVICE_URL="${ACTIVATION_SERVICE_URL:-}"
 
 install_recognition_scheduler() {
@@ -86,7 +88,7 @@ elif [ -n "$api_status" ] || [ -n "$web_status" ]; then
 fi
 
 exec /usr/bin/flock -n -E 76 /run/laymatched-recognition-heartbeat.lock \
-    /usr/bin/python3 /opt/laymatched/recognition_client.py heartbeat \
+    /usr/bin/python3 /opt/laymatched/provisioning-current/recognition_client.py heartbeat \
     --state-dir "$STATE_DIR" --central-url "$central_url" \
     --app-version "$app_version" --service-status "$service_status"
 HEARTBEAT_RUNNER_EOF
@@ -126,6 +128,84 @@ HEARTBEAT_TIMER_EOF
     systemctl daemon-reload
     systemctl enable --now laymatched-recognition-heartbeat.timer
     log_info "Central recognition heartbeat scheduler enabled."
+}
+
+# Install the customer provisioning helpers as one atomic, self-contained bundle.
+# The embedded fallback is required for legacy installations whose old updater
+# never received these sidecar files. It contains no credentials or tokens.
+install_provisioning_helpers() {
+    local install_root="${LAYMATCHED_INSTALL_ROOT:-/opt/laymatched}"
+    local stage backup name destination
+    local -a names=(customer_hostname.py configure-customer-https.sh recognition_client.py)
+    mkdir -p "$install_root"
+    stage="$(mktemp -d "$install_root/.helpers-stage.XXXXXX")"
+    backup="$(mktemp -d "$install_root/.helpers-backup.XXXXXX")"
+    cleanup_helpers() { rm -rf -- "$stage" "$backup"; }
+    rollback_helpers() {
+        local item
+        for item in "${names[@]}"; do
+            destination="$install_root/$item"
+            if [ -f "$backup/$item" ]; then
+                install -o root -g root -m 0755 "$backup/$item" "$destination"
+            else
+                rm -f -- "$destination"
+            fi
+        done
+        cleanup_helpers
+    }
+    if [ -f "$SCRIPT_DIR/tools/customer_hostname.py" ] && [ -f "$SCRIPT_DIR/scripts/configure-customer-https.sh" ] && [ -f "$SCRIPT_DIR/tools/recognition_client.py" ]; then
+        install -D -m 0755 "$SCRIPT_DIR/tools/customer_hostname.py" "$stage/customer_hostname.py"
+        install -D -m 0755 "$SCRIPT_DIR/scripts/configure-customer-https.sh" "$stage/configure-customer-https.sh"
+        install -D -m 0755 "$SCRIPT_DIR/tools/recognition_client.py" "$stage/recognition_client.py"
+    else
+        printf '%s' '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' | base64 -d | tar -xzf - -C "$stage" --strip-components=1
+    fi
+    for name in "${names[@]}"; do
+        [ -s "$stage/$name" ] || { rollback_helpers; return 1; }
+        destination="$install_root/$name"
+        if [ -f "$destination" ]; then
+            cp --preserve=mode,ownership "$destination" "$backup/$name"
+        fi
+    done
+    # Publish the complete bundle behind one atomic pointer. Consumers use
+    # provisioning-current, so they never observe a mixture of generations
+    # when an update is interrupted or the host stops between writes.
+    local bundle_root="$install_root/.provisioning-helper-bundles"
+    local release
+    release="$bundle_root/release-$(date +%s)-$$"
+    local bundle_link_tmp="$bundle_root/.current.$$"
+    local install_link_tmp="$install_root/.provisioning-current.$$"
+    install -d -o root -g root -m 0755 "$bundle_root"
+    mv -- "$stage" "$release"
+    stage=""
+    ln -s -- "$release" "$bundle_link_tmp"
+    mv -Tf -- "$bundle_link_tmp" "$bundle_root/current"
+    ln -s -- "$bundle_root/current" "$install_link_tmp"
+    mv -Tf -- "$install_link_tmp" "$install_root/provisioning-current"
+    cleanup_helpers
+}
+
+install_existing_https_renewal_hook() {
+    local customer_hostname="$1"
+    local hook="/etc/letsencrypt/renewal-hooks/deploy/laymatched-https-report.sh"
+    [ -f "/etc/letsencrypt/live/$customer_hostname/cert.pem" ] || return 0
+    install -d -o root -g root -m 0755 "$(dirname "$hook")"
+    umask 077
+    cat > "$hook" <<HOOK
+#!/usr/bin/env bash
+set -euo pipefail
+nginx -t && systemctl reload nginx
+central_url="\$(sed -n 's/^ACTIVATION_SERVICE_URL=//p' /etc/laymatched/recognition.env 2>/dev/null || true)"
+app_version="\$(sed -n 's/^APP_VERSION=//p' /opt/laymatched/.env 2>/dev/null || true)"
+if [ -n "\$central_url" ] && [ -n "\$app_version" ] && [ -x /opt/laymatched/provisioning-current/recognition_client.py ]; then
+    exec /usr/bin/python3 /opt/laymatched/provisioning-current/recognition_client.py report-https \\
+        --state-dir /var/lib/laymatched/activation --central-url "\$central_url" \\
+        --app-version "\$app_version" --hostname "$customer_hostname" \\
+        --certificate /etc/letsencrypt/live/$customer_hostname/cert.pem \\
+        --challenge-root /var/www/letsencrypt
+fi
+HOOK
+    chmod 0755 "$hook"
 }
 
 CANDIDATE_ENV_FILE=""
@@ -470,6 +550,21 @@ fi
 ensure_mfa_encryption_key /opt/laymatched/.env || \
     log_error "MFA encryption configuration is missing or invalid."
 
+# Supported updater bundles carry the provisioning helpers alongside update.sh.
+# The embedded fallback also upgrades genuinely old installations atomically.
+install_provisioning_helpers || log_error "Could not install the customer provisioning helper bundle."
+
+CUSTOMER_HOSTNAME=$(grep '^CUSTOMER_HOSTNAME=' /opt/laymatched/.env | cut -d'=' -f2- || true)
+if [ -n "$CUSTOMER_HOSTNAME" ] && [ -x /opt/laymatched/provisioning-current/customer_hostname.py ]; then
+    expected_hostname=$(python3 /opt/laymatched/provisioning-current/customer_hostname.py "${CUSTOMER_HOSTNAME%%.matched.laysports.co.uk}" 2>/dev/null || true)
+    if [ "$expected_hostname" != "$CUSTOMER_HOSTNAME" ]; then
+        log_error "Stored customer hostname is invalid; refusing to update the installation."
+    fi
+fi
+if [ -n "$CUSTOMER_HOSTNAME" ]; then
+    install_existing_https_renewal_hook "$CUSTOMER_HOSTNAME"
+fi
+
 # -- Parse version override argument --------------------------------------
 # Usage: update.sh [APPROVED_VERSION]
 # An optional version is accepted only when it matches the version returned by
@@ -766,6 +861,7 @@ Logs and status:
 Configuration preserved:
   - /opt/laymatched/.env    - generated secrets, version, and APP_VERSION (Installer Token not stored)
   - /opt/laymatched/data    - persistent application data (Docker volumes: postgres_data, bookmaker_icon_cache)
+  - Customer hostname       - ${CUSTOMER_HOSTNAME:-not configured}; certificates and Nginx routing were preserved
 
 ================================================================================
 UPDATE_EOF
