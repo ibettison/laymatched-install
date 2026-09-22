@@ -143,6 +143,7 @@ func TestTokenToolAgainstActualAuthorisationHandler(t *testing.T) {
 	db = dbForAPI
 	cfg = Config{
 		RegistryURL:     "registry.test.invalid",
+		ActivationURL:   "https://matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	rateLimiter = NewRateLimiter(cfg.RateLimitPerMin, time.Minute)
@@ -154,7 +155,7 @@ func TestTokenToolAgainstActualAuthorisationHandler(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("actual authorisation handler rejected token with status %d", status)
 	}
-	if response.RegistryToken != installerToken || response.ApprovedVersion != "v9.9.9" || response.RegistryURL != "registry.test.invalid" {
+	if response.RegistryToken != installerToken || response.ApprovedVersion != "v9.9.9" || response.RegistryURL != "registry.test.invalid" || response.ActivationURL != "https://matched.laysports.co.uk" {
 		t.Fatal("actual authorisation handler returned unexpected success response")
 	}
 
