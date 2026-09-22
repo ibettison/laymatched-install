@@ -342,33 +342,44 @@ def reserve_hostname(args) -> int:
     state = json.loads((directory / "state.json").read_text())
     deadline = time.monotonic() + max(1, args.wait_seconds)
     session = _ensure_session(args, directory, _session(directory), retry_deadline=deadline)
-    availability_body = {"nickname": args.nickname}
-    availability_path = f"/v1/activations/{session['activation_id']}/nickname-availability"
-    availability, session = _request_authenticated(
-        args, directory, session, method="POST", path=availability_path, body=availability_body,
-        operation="nickname availability", retry_deadline=deadline,
-    )
-    if not availability.get("available"):
-        raise RuntimeError("nickname is unavailable")
-    reservation_body = {"nickname": args.nickname, "public_ipv4": args.public_ipv4}
-    reservation_path = f"/v1/activations/{session['activation_id']}/nickname-reservations"
-    reservation, session = _request_authenticated(
-        args, directory, session, method="POST", path=reservation_path, body=reservation_body,
-        operation="nickname reservation", retry_deadline=deadline,
-    )
+    activation_status = _status(args, directory, session, retry_deadline=deadline)
+    resuming_reservation = bool(activation_status.get("reservation_id"))
+    if resuming_reservation:
+        if activation_status.get("nickname") != args.nickname or activation_status.get("hostname") != f"{args.nickname}.matched.laysports.co.uk":
+            raise RuntimeError("existing activation reservation does not match the requested nickname")
+        reservation = _reservation_from_status(activation_status)
+        reservation["network_challenge"] = activation_status.get("network_challenge")
+    else:
+        availability_body = {"nickname": args.nickname}
+        availability_path = f"/v1/activations/{session['activation_id']}/nickname-availability"
+        availability, session = _request_authenticated(
+            args, directory, session, method="POST", path=availability_path, body=availability_body,
+            operation="nickname availability", retry_deadline=deadline,
+        )
+        if not availability.get("available"):
+            raise RuntimeError("nickname is unavailable")
+        reservation_body = {"nickname": args.nickname, "public_ipv4": args.public_ipv4}
+        reservation_path = f"/v1/activations/{session['activation_id']}/nickname-reservations"
+        reservation, session = _request_authenticated(
+            args, directory, session, method="POST", path=reservation_path, body=reservation_body,
+            operation="nickname reservation", retry_deadline=deadline,
+        )
+    if reservation.get("nickname") != args.nickname or reservation.get("hostname") != f"{args.nickname}.matched.laysports.co.uk":
+        raise RuntimeError("central recognition returned a hostname reservation that does not match the requested nickname")
     _write_hostname(directory, reservation)
     challenge = reservation.get("network_challenge")
-    if not challenge:
+    if not challenge and not resuming_reservation:
         raise RuntimeError("central recognition did not issue a network challenge")
-    _write_challenge(Path(args.challenge_root), "network", challenge)
-    network_body = {"public_ipv4": args.public_ipv4, "public_ipv6": None, "challenge_response": challenge}
-    network_path = f"/v1/activations/{session['activation_id']}/network"
-    current_status = _status(args, directory, session, retry_deadline=deadline)
-    _, session = _request_authenticated(
-        args, directory, session, method="PUT", path=network_path, body=network_body,
-        operation="public-IP challenge verification", retry_deadline=deadline,
-        extra_headers={"If-Match": f'"{current_status.get("version", session.get("version", 1))}"'},
-    )
+    if challenge:
+        _write_challenge(Path(args.challenge_root), "network", challenge)
+        network_body = {"public_ipv4": args.public_ipv4, "public_ipv6": None, "challenge_response": challenge}
+        network_path = f"/v1/activations/{session['activation_id']}/network"
+        current_status = _status(args, directory, session, retry_deadline=deadline)
+        _, session = _request_authenticated(
+            args, directory, session, method="PUT", path=network_path, body=network_body,
+            operation="public-IP challenge verification", retry_deadline=deadline,
+            extra_headers={"If-Match": f'"{current_status.get("version", session.get("version", 1))}"'},
+        )
     next_renewal = time.monotonic() + 600
     while reservation.get("status") != "dns_ready":
         dns_failed = reservation.get("status") == "dns_failed"
