@@ -88,9 +88,10 @@ elif [ -n "$api_status" ] || [ -n "$web_status" ]; then
 fi
 
 exec /usr/bin/flock -n -E 76 /run/laymatched-recognition-heartbeat.lock \
-    /usr/bin/python3 /opt/laymatched/provisioning-current/recognition_client.py heartbeat \
-    --state-dir "$STATE_DIR" --central-url "$central_url" \
-    --app-version "$app_version" --service-status "$service_status"
+    /usr/bin/python3 /opt/laymatched/provisioning-current/recognition_client.py \
+    --central-url "$central_url" --state-dir "$STATE_DIR" \
+    --app-version "$app_version" heartbeat \
+    --service-status "$service_status"
 HEARTBEAT_RUNNER_EOF
     chown root:root /opt/laymatched/recognition-heartbeat.sh
     chmod 755 /opt/laymatched/recognition-heartbeat.sh
@@ -198,9 +199,10 @@ nginx -t && systemctl reload nginx
 central_url="\$(sed -n 's/^ACTIVATION_SERVICE_URL=//p' /etc/laymatched/recognition.env 2>/dev/null || true)"
 app_version="\$(sed -n 's/^APP_VERSION=//p' /opt/laymatched/.env 2>/dev/null || true)"
 if [ -n "\$central_url" ] && [ -n "\$app_version" ] && [ -x /opt/laymatched/provisioning-current/recognition_client.py ]; then
-    exec /usr/bin/python3 /opt/laymatched/provisioning-current/recognition_client.py report-https \\
-        --state-dir /var/lib/laymatched/activation --central-url "\$central_url" \\
-        --app-version "\$app_version" --hostname "$customer_hostname" \\
+    exec /usr/bin/python3 /opt/laymatched/provisioning-current/recognition_client.py \\
+        --central-url "\$central_url" --state-dir /var/lib/laymatched/activation \\
+        --app-version "\$app_version" report-https \\
+        --hostname "$customer_hostname" \\
         --certificate /etc/letsencrypt/live/$customer_hostname/cert.pem \\
         --challenge-root /var/www/letsencrypt
 fi
