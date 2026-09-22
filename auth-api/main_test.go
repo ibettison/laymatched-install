@@ -181,6 +181,7 @@ func TestAuthorizeValidToken(t *testing.T) {
 		Port:            "8443",
 		DBPath:          "",
 		RegistryURL:     "registry.matched.laysports.co.uk",
+		ActivationURL:   "https://matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	db = testDB
@@ -210,6 +211,9 @@ func TestAuthorizeValidToken(t *testing.T) {
 	}
 	if resp.RegistryURL != "registry.matched.laysports.co.uk" {
 		t.Errorf("Expected registry.matched.laysports.co.uk, got %s", resp.RegistryURL)
+	}
+	if resp.ActivationURL != "https://matched.laysports.co.uk" {
+		t.Errorf("Expected activation URL, got %s", resp.ActivationURL)
 	}
 	// registry_token should be the installer token itself (for use with /token endpoint)
 	if resp.RegistryToken != token {
@@ -826,12 +830,14 @@ func TestAuthorizeFailsClosedWithoutApprovedRelease(t *testing.T) {
 		name       string
 		hasFile    bool
 		contents   string
+		activation bool
 		wantStatus int
 	}{
-		{name: "missing", wantStatus: http.StatusServiceUnavailable},
-		{name: "empty", hasFile: true, contents: "", wantStatus: http.StatusServiceUnavailable},
-		{name: "invalid", hasFile: true, contents: "latest", wantStatus: http.StatusServiceUnavailable},
-		{name: "valid", hasFile: true, contents: "v0.2.0", wantStatus: http.StatusOK},
+		{name: "missing", wantStatus: http.StatusServiceUnavailable, activation: true},
+		{name: "empty", hasFile: true, contents: "", wantStatus: http.StatusServiceUnavailable, activation: true},
+		{name: "invalid", hasFile: true, contents: "latest", wantStatus: http.StatusServiceUnavailable, activation: true},
+		{name: "valid", hasFile: true, contents: "v0.2.0", wantStatus: http.StatusOK, activation: true},
+		{name: "missing activation URL", hasFile: true, contents: "v0.2.0", wantStatus: http.StatusServiceUnavailable},
 	}
 
 	for _, tc := range cases {
@@ -845,7 +851,11 @@ func TestAuthorizeFailsClosedWithoutApprovedRelease(t *testing.T) {
 			publicKey = pub
 			cfg = Config{
 				RegistryURL:     "registry.matched.laysports.co.uk",
+				ActivationURL:   "https://matched.laysports.co.uk",
 				RateLimitPerMin: 1000,
+			}
+			if !tc.activation {
+				cfg.ActivationURL = ""
 			}
 
 			versionPath := filepath.Join(t.TempDir(), "approved_version.txt")
@@ -893,6 +903,7 @@ func TestRegistryURLReturned(t *testing.T) {
 
 	cfg = Config{
 		RegistryURL:     "registry.matched.laysports.co.uk",
+		ActivationURL:   "https://matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	approvedVersion = loadApprovedVersion()
@@ -1000,6 +1011,7 @@ func TestConcurrentTokenValidation(t *testing.T) {
 
 	cfg = Config{
 		RegistryURL:     "registry.matched.laysports.co.uk",
+		ActivationURL:   "https://matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 

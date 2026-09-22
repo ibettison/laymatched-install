@@ -1,9 +1,12 @@
 import base64
+import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 import time
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -93,6 +96,33 @@ class RecognitionClientTests(unittest.TestCase):
                 "central test", lambda: (_ for _ in ()).throw(recognition_client.RecognitionHTTPError(422)),
                 deadline=10,
             )
+
+    def test_retry_exhaustion_reports_final_http_status(self):
+        with self.assertRaisesRegex(RuntimeError, r"central test .*\(HTTP 503\)") as raised:
+            recognition_client._call_with_retries(
+                "central test", lambda: (_ for _ in ()).throw(recognition_client.RecognitionHTTPError(503)),
+                deadline=0,
+            )
+        logged = io.StringIO()
+        with patch("sys.stderr", logged):
+            print(f"central recognition error: {raised.exception}", file=sys.stderr)
+        self.assertIn("HTTP 503", logged.getvalue())
+
+    def test_retry_exhaustion_reports_connection_category_without_exception_details(self):
+        sensitive = "https://installer:secret@example.test/path assertion=installer-assertion headers={'Authorization': 'Bearer token'} body=response-secret"
+        with self.assertRaisesRegex(RuntimeError, r"central test .*\(connection failure\)") as raised:
+            recognition_client._call_with_retries(
+                "central test", lambda: (_ for _ in ()).throw(urllib.error.URLError(sensitive)),
+                deadline=0,
+            )
+        logged = io.StringIO()
+        with patch("sys.stderr", logged):
+            print(f"central recognition error: {raised.exception}", file=sys.stderr)
+        self.assertIn("connection failure", logged.getvalue())
+        self.assertNotIn("installer:secret", logged.getvalue())
+        self.assertNotIn("installer-assertion", logged.getvalue())
+        self.assertNotIn("Authorization", logged.getvalue())
+        self.assertNotIn("response-secret", logged.getvalue())
 
     def test_dns_failed_status_is_retryable_only_with_central_retry_after(self):
         retryable = recognition_client._reservation_from_status({

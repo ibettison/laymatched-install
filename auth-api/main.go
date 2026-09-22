@@ -95,7 +95,7 @@ type AuthorizeResponse struct {
 	RegistryToken   string `json:"registry_token"`
 	ApprovedVersion string `json:"approved_version"`
 	RegistryURL     string `json:"registry_url"`
-	ActivationURL   string `json:"activation_url,omitempty"`
+	ActivationURL   string `json:"activation_url"`
 }
 
 type ActivationAssertionRequest struct {
@@ -751,6 +751,15 @@ func authorizeHandler(c *gin.Context) {
 	if err := isTokenValid(t.RevokedAt, t.ExpiresAt); err != nil {
 		logRequest(c, http.StatusUnauthorized, tokenPrefix, "invalid or revoked token")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+
+	// A successful authorization response must always identify the central
+	// activation service. Do not issue a usable-looking response that would
+	// force the installer to guess a hostname or weaken its activation checks.
+	if strings.TrimSpace(cfg.ActivationURL) == "" {
+		logError(c, http.StatusServiceUnavailable, tokenPrefix, "activation service URL is not configured")
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "activation service unavailable"})
 		return
 	}
 
