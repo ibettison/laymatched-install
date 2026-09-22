@@ -99,7 +99,7 @@ class RecognitionSchedulerTests(unittest.TestCase):
                 .replace("/var/lib/laymatched/activation", str(state_dir))
                 .replace("/run/laymatched-recognition-heartbeat.lock", str(lock))
                 .replace(
-                    "/usr/bin/python3 /opt/laymatched/recognition_client.py",
+                    "/usr/bin/python3 /opt/laymatched/provisioning-current/recognition_client.py",
                     f"/usr/bin/python3 {fake_client}",
                 )
             )

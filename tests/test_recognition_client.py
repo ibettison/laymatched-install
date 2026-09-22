@@ -71,6 +71,89 @@ class RecognitionClientTests(unittest.TestCase):
         self.assertEqual(post.call_args_list[2].args[2]["Authorization"], "Bearer refreshed-session")
         self.assertEqual(post.call_args_list[0].args[2]["Idempotency-Key"], post.call_args_list[2].args[2]["Idempotency-Key"])
 
+    def test_version_conflict_is_explicitly_retryable(self):
+        error = recognition_client.RecognitionHTTPError(409)
+        self.assertEqual(error.status, 409)
+        self.assertIn("fetch current activation status", str(error))
+
+    def test_transient_central_failure_is_retried_but_terminal_http_failure_is_not(self):
+        calls = []
+        with patch.object(recognition_client.time, "sleep") as sleep, \
+             patch.object(recognition_client.time, "monotonic", side_effect=[0, 0]):
+            result = recognition_client._call_with_retries(
+                "central test", lambda: calls.append(1) or ({} if len(calls) == 2 else (_ for _ in ()).throw(OSError("offline"))),
+                deadline=10,
+            )
+        self.assertEqual(result, {})
+        self.assertEqual(len(calls), 2)
+        sleep.assert_called_once()
+
+        with self.assertRaises(recognition_client.RecognitionHTTPError):
+            recognition_client._call_with_retries(
+                "central test", lambda: (_ for _ in ()).throw(recognition_client.RecognitionHTTPError(422)),
+                deadline=10,
+            )
+
+    def test_dns_failed_status_is_retryable_only_with_central_retry_after(self):
+        retryable = recognition_client._reservation_from_status({
+            "reservation_id": "r", "nickname": "winning-way", "hostname": "winning-way.matched.laysports.co.uk",
+            "dns": {"status": "failed", "retry_after": 5}, "reservation_expires_at": None,
+        })
+        terminal = recognition_client._reservation_from_status({
+            "reservation_id": "r", "nickname": "winning-way", "hostname": "winning-way.matched.laysports.co.uk",
+            "dns": {"status": "failed", "retry_after": None}, "reservation_expires_at": None,
+        })
+        self.assertEqual(retryable["status"], "dns_failed")
+        self.assertEqual(retryable["retry_after"], 5)
+        self.assertEqual(terminal["status"], "dns_failed")
+        self.assertIsNone(terminal["retry_after"])
+
+    def test_mfa_report_reads_verified_state_from_customer_api_database(self):
+        session = {"activation_id": "22222222-2222-4222-8222-222222222222", "access_token": "central-session", "version": 4}
+        args = type("Args", (), {
+            "state_dir": self.directory,
+            "central_url": "https://central",
+            "app_version": "v1.2.3",
+            "compose_dir": str(self.directory),
+        })
+        local_status = {
+            "source": "customer_mfa_database",
+            "enabled": True,
+            "verified_at": "2026-09-21T12:00:00+00:00",
+            "recovery_codes_generated": True,
+            "local_security_version": 7,
+        }
+        with patch.object(recognition_client, "_state_and_session", return_value=(
+            {"installation_id": "11111111-1111-4111-8111-111111111111"}, session
+        )), patch.object(recognition_client, "_status", return_value={"version": 4}), \
+             patch.object(recognition_client.subprocess, "run", return_value=type("Completed", (), {"stdout": json.dumps(local_status)})()), \
+             patch.object(recognition_client, "_request_authenticated", return_value=({}, session)) as request:
+            self.assertEqual(recognition_client.report_mfa(args), 0)
+        self.assertEqual(request.call_args.kwargs["body"], {
+            "enabled": True,
+            "method": "totp",
+            "verified_at": local_status["verified_at"],
+            "recovery_codes_generated": True,
+            "local_security_version": 7,
+        })
+
+    def test_mfa_report_rejects_unverified_local_state(self):
+        session = {"activation_id": "22222222-2222-4222-8222-222222222222", "access_token": "central-session", "version": 4}
+        args = type("Args", (), {
+            "state_dir": self.directory,
+            "central_url": "https://central",
+            "app_version": "v1.2.3",
+            "compose_dir": str(self.directory),
+        })
+        with patch.object(recognition_client, "_state_and_session", return_value=(
+            {"installation_id": "11111111-1111-4111-8111-111111111111"}, session
+        )), patch.object(recognition_client, "_status", return_value={"version": 4}), \
+             patch.object(recognition_client.subprocess, "run", return_value=type("Completed", (), {
+                 "stdout": json.dumps({"source": "customer_mfa_database", "enabled": False})
+             })()):
+            with self.assertRaisesRegex(RuntimeError, "verified enrolment ceremony"):
+                recognition_client.report_mfa(args)
+
     def test_partial_delivery_persists_only_unsent_entries_with_stable_keys(self):
         (self.directory / "session.json").write_text(json.dumps({"activation_id": "22222222-2222-4222-8222-222222222222", "access_token": "central-session", "expires_at": int(time.time()) + 900}))
         (self.directory / "heartbeat-outbox.json").write_text(json.dumps([

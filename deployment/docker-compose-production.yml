@@ -10,6 +10,7 @@ services:
       - DB_PATH=/data/auth-tokens.db
       - APPROVED_VERSION_PATH=/approval/approved_version.txt
       - REGISTRY_URL=registry.matched.laysports.co.uk
+      - ACTIVATION_SERVICE_URL=https://matched.laysports.co.uk
       - PRIVATE_KEY_PATH=/data/private.pem
       - PUBLIC_KEY_PATH=/data/public.pem
       - REGISTRY_PUBLIC_KEY_PATH=/data/auth-public.pem

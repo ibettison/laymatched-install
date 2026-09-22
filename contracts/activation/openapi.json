@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "https://auth.matched.laysports.co.uk",
+      "url": "https://matched.laysports.co.uk",
       "description": "Production authority; implementation is outside Slice 0"
     }
   ],
@@ -193,6 +193,7 @@
         ],
         "parameters": [
           { "$ref": "#/components/parameters/ActivationId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
           { "$ref": "#/components/parameters/SignatureTimestamp" },
           { "$ref": "#/components/parameters/SignatureNonce" }
         ],
@@ -573,6 +574,40 @@
           "409": { "$ref": "#/components/responses/Conflict" },
           "422": { "$ref": "#/components/responses/ValidationError" },
           "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/v1/activations/{activation_id}/deactivate": {
+      "post": {
+        "operationId": "deactivateActivation",
+        "summary": "Deactivate an authenticated installation and withdraw its hostname",
+        "description": "Deactivation is terminal for the activation. DNS withdrawal is queued and ownership-checked; the nickname remains quarantined before later reuse.",
+        "tags": ["Activation"],
+        "security": [
+          { "ActivationToken": [], "InstallationSignature": [] }
+        ],
+        "parameters": [
+          { "$ref": "#/components/parameters/ActivationId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/SignatureTimestamp" },
+          { "$ref": "#/components/parameters/SignatureNonce" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "responses": {
+          "202": {
+            "description": "Deactivation accepted; DNS withdrawal is pending or not required",
+            "headers": { "ETag": { "schema": { "type": "string" } } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeactivationResponse" } } }
+          },
+          "200": {
+            "description": "Deactivation returned idempotently",
+            "headers": { "ETag": { "schema": { "type": "string" } } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeactivationResponse" } } }
+          },
+          "401": { "$ref": "#/components/responses/InvalidCredential" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" }
         }
       }
     },
@@ -1055,7 +1090,8 @@
           "hostname": { "type": "string", "format": "hostname" },
           "status": { "$ref": "#/components/schemas/ActivationState" },
           "reservation_expires_at": { "type": ["string", "null"], "format": "date-time", "description": "Null after hostname ownership is committed." },
-          "retry_after": { "type": ["integer", "null"], "minimum": 1, "description": "Null after hostname ownership is committed." }
+          "retry_after": { "type": ["integer", "null"], "minimum": 1, "description": "Null after hostname ownership is committed." },
+          "network_challenge": { "type": ["string", "null"], "minLength": 16, "maxLength": 128, "description": "Short-lived public reachability challenge; never a credential." }
         }
       },
       "NicknameReservationRenewalRequest": {
@@ -1114,7 +1150,19 @@
           "verified_at": { "type": ["string", "null"], "format": "date-time" },
           "certificate_not_after": { "type": ["string", "null"], "format": "date-time" },
           "last_error": { "type": ["string", "null"], "maxLength": 500 },
-          "retry_after": { "type": ["integer", "null"], "minimum": 1 }
+          "retry_after": { "type": ["integer", "null"], "minimum": 1 },
+          "challenge_nonce": { "type": ["string", "null"], "minLength": 16, "maxLength": 128, "description": "Short-lived HTTPS reachability challenge; never a credential." }
+        }
+      },
+      "DeactivationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "dns_withdrawal", "quarantine_until"],
+        "properties": {
+          "status": { "const": "deactivated" },
+          "dns_withdrawal": { "type": "string", "enum": ["pending", "not_required"] },
+          "quarantine_until": { "type": ["string", "null"], "format": "date-time" },
+          "next_action": { "type": "string", "enum": ["await_dns_withdrawal", "none"] }
         }
       },
       "MfaStatusUpdateRequest": {
@@ -1153,6 +1201,9 @@
           "profile": { "$ref": "#/components/schemas/ProfileStatus" },
           "nickname": { "type": ["string", "null"] },
           "hostname": { "type": ["string", "null"], "format": "hostname" },
+          "reservation_id": { "type": ["string", "null"], "format": "uuid" },
+          "reservation_expires_at": { "type": ["string", "null"], "format": "date-time" },
+          "network_challenge": { "type": ["string", "null"], "minLength": 16, "maxLength": 128 },
           "dns": { "$ref": "#/components/schemas/DnsStatus" },
           "https": { "$ref": "#/components/schemas/HttpsStatus" },
           "mfa": { "$ref": "#/components/schemas/MfaStatus" },

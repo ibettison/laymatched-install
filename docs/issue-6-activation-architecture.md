@@ -336,7 +336,7 @@ data and cannot restore authoritative DNS ownership.
 The shared contract should be OpenAPI 3.1 under:
 
 ```text
-https://auth.matched.laysports.co.uk/v1/activations
+https://matched.laysports.co.uk/v1/activations
 ```
 
 A separately deployed activation service may later implement the same contract
