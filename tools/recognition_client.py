@@ -51,7 +51,10 @@ def _call_with_retries(operation: str, call, *, deadline: float):
                 raise
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise RuntimeError(f"{operation} remained unavailable during the bounded retry window") from error
+                category = f"HTTP {error.status}" if isinstance(error, RecognitionHTTPError) else "connection failure"
+                raise RuntimeError(
+                    f"{operation} remained unavailable during the bounded retry window ({category})"
+                ) from error
             delay = min(2 ** min(attempt, 4), 15, remaining)
             time.sleep(max(0.1, delay))
             attempt += 1
