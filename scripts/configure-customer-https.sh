@@ -234,6 +234,11 @@ server {
     ssl_certificate_key $letsencrypt_root/live/$hostname/privkey.pem;
     include $letsencrypt_root/options-ssl-nginx.conf;
     ssl_dhparam $letsencrypt_root/ssl-dhparams.pem;
+    location ^~ /.well-known/laymatched-https/ {
+        root $challenge_root;
+        default_type text/plain;
+        try_files \$uri =404;
+    }
     location / {
         proxy_pass http://$web_upstream;
         proxy_set_header Host \$host;

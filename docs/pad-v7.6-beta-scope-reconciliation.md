@@ -2571,3 +2571,32 @@ this work.
 - **AWS CUSTOMER VPS:** NOT ACCESSED OR MODIFIED. Safe update-and-resume
   commands are provided in the work review for the operator to run after the
   merged fix is available.
+
+### HTTPS challenge-routing follow-up (2026-09-22)
+
+The subsequent HTTPS proof returned HTTP 422 with
+`X-Activation-Error: https_failed` and the detail “Independent HTTPS
+verification failed.” The customer homepage returned HTTP 200 with valid TLS,
+and the challenge file existed below `/var/www/letsencrypt/.well-known/laymatched-https/`,
+but requesting it over HTTPS returned HTTP 404. Inspection confirmed that the
+port 80 server mapped this path to `/var/www/letsencrypt`, while the port 443
+server had only the application proxy route. The challenge request therefore
+went to the application instead of Nginx's static-file handler.
+
+The HTTPS server template now has a `^~ /.well-known/laymatched-https/`
+location rooted at the configured challenge directory, serves it as
+`text/plain`, and returns 404 for a missing challenge file. The HTTP challenge
+routes, TLS settings, certificate files, activation session and reservation
+flows are unchanged. A focused rendered-configuration regression verifies
+that HTTPS challenge requests use this static route and remain separate from
+the application proxy.
+
+- Focused HTTPS retry/challenge-route test function and embedded-helper
+  reproducibility test function, run directly with temporary directories:
+  **passed (2)**.
+- Shell syntax for `scripts/configure-customer-https.sh` and `update.sh`, and
+  `git diff --check`: **passed**. The pytest runner was unavailable; installing
+  it in an isolated `/tmp` environment was blocked because package DNS was
+  unavailable.
+- Fasthosts deployment: not performed; no documented installer deployment
+  target/procedure was available. AWS was not accessed or modified.
