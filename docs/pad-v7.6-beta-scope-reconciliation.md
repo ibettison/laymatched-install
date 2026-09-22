@@ -2547,8 +2547,10 @@ this work.
 
 ### Release and verification
 
-- PR: new PR against `main`, separate from merged PR #36; link and merge
-  result are recorded after creation.
+- PR: [#37](https://github.com/ibettison/laymatched-install/pull/37),
+  separate from merged PR #36; **OPEN / MERGEABLE**.
+- Head: `154d4005d3d763d5fe2de0d7fc557e647f6cc56d` on
+  `fix/customer-https-tls-support`, targeting `main`.
 - Changed files: `scripts/configure-customer-https.sh`, `update.sh`,
   `tests/test_customer_dns_https.py`, and this section.
 - `tests/test_customer_dns_https.py` and
@@ -2558,7 +2560,7 @@ this work.
 - `git diff --check`: **passed**.
 - Embedded updater helper fallback reproducibility and byte comparison:
   **passed** as part of the DNS/HTTPS suite.
-- **MERGED:** NO.
+- **MERGED:** NO — PR #37 is awaiting required checks/review.
 - **DEPLOYED ON FASTHOSTS:** NO.
 - **AWS CUSTOMER VPS:** NOT ACCESSED OR MODIFIED. Safe update-and-resume
   commands will be recorded in the work review; the operator must run them on
