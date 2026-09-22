@@ -21,6 +21,7 @@ fi
 state_dir="${ACTIVATION_STATE_DIR:-/var/lib/laymatched/activation}"
 web_upstream="${LAYMATCHED_WEB_UPSTREAM:-127.0.0.1:8080}"
 nginx_root="${LAYMATCHED_NGINX_ROOT:-/etc/nginx}"
+letsencrypt_root="${LAYMATCHED_LETSENCRYPT_DIR:-/etc/letsencrypt}"
 nginx_site="${LAYMATCHED_NGINX_SITE:-${nginx_root}/sites-available/laymatched}"
 nginx_enabled="${LAYMATCHED_NGINX_ENABLED:-${nginx_root}/sites-enabled/laymatched}"
 challenge_root="${LAYMATCHED_CHALLENGE_ROOT:-/var/www/letsencrypt}"
@@ -35,6 +36,36 @@ certbot_mode="${LAYMATCHED_ACME_MODE:-real}"
 [ -n "$hostname" ] || fail "customer hostname is required"
 python3 "$hostname_helper" "${hostname%%.matched.laysports.co.uk}" >/dev/null \
     || fail "customer hostname is invalid"
+
+ensure_tls_support_files() {
+    local options_file="${letsencrypt_root}/options-ssl-nginx.conf"
+    local dhparams_file="${letsencrypt_root}/ssl-dhparams.pem"
+    local temporary
+    install -d -o root -g root -m 0755 "$letsencrypt_root"
+    if [ ! -s "$options_file" ]; then
+        temporary="${options_file}.tmp.$$"
+        umask 077
+        cat > "$temporary" <<'TLS_OPTIONS'
+ssl_session_cache shared:laymatched_ssl:10m;
+ssl_session_timeout 1d;
+ssl_session_tickets off;
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_prefer_server_ciphers off;
+TLS_OPTIONS
+        chmod 0644 "$temporary"
+        mv -f "$temporary" "$options_file"
+    fi
+    if [ ! -s "$dhparams_file" ]; then
+        command -v openssl >/dev/null 2>&1 || fail "openssl is required to prepare Nginx TLS parameters"
+        temporary="${dhparams_file}.tmp.$$"
+        if ! openssl genpkey -genparam -algorithm DH -pkeyopt group:ffdhe2048 -out "$temporary"; then
+            rm -f -- "$temporary"
+            fail "Could not generate Nginx TLS parameters"
+        fi
+        chmod 0644 "$temporary"
+        mv -f "$temporary" "$dhparams_file"
+    fi
+}
 
 install -d -o root -g root -m 0755 "$challenge_root/.well-known/acme-challenge"
 install -d -o root -g root -m 0700 "$state_dir"
@@ -199,10 +230,10 @@ server {
 server {
     listen 443 ssl http2;
     server_name $hostname;
-    ssl_certificate /etc/letsencrypt/live/$hostname/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$hostname/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+    ssl_certificate $letsencrypt_root/live/$hostname/fullchain.pem;
+    ssl_certificate_key $letsencrypt_root/live/$hostname/privkey.pem;
+    include $letsencrypt_root/options-ssl-nginx.conf;
+    ssl_dhparam $letsencrypt_root/ssl-dhparams.pem;
     location / {
         proxy_pass http://$web_upstream;
         proxy_set_header Host \$host;
@@ -263,6 +294,7 @@ fi
 
 write_http_config
 install_renewal_hook
+ensure_tls_support_files
 
 if [ "$certbot_mode" = "mock" ]; then
     log_info "ACME mock mode: HTTP challenge configuration rendered"
@@ -277,8 +309,7 @@ else
     email_args=(--register-unsafely-without-email)
 fi
 if ! certbot certonly --webroot -w "$challenge_root" -d "$hostname" \
-    "${email_args[@]}" --non-interactive --agree-tos --keep-until-expiring \
-    --deploy-hook 'nginx -t && systemctl reload nginx'; then
+    "${email_args[@]}" --non-interactive --agree-tos --keep-until-expiring; then
     restore_http_config
     fail "Certbot failed; the previous Nginx configuration was restored"
 fi

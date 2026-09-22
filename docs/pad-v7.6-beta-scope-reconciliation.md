@@ -2517,3 +2517,49 @@ NEXT TASK: perform the owner-controlled live A-08 acceptance journey through
 the trusted customer HTTPS hostname, including MFA setup, valid/invalid code
 handling, recovery/reset, persistence, and password-plus-TOTP re-login; then
 record ACCEPTED-PROVEN LIVE only if that evidence succeeds.
+
+## 45. Installer DNS recovery and HTTPS support-file fix (2026-09-22)
+
+The reported installer run first timed out while waiting for customer DNS, then
+recovered to DNS ready on retry. Let's Encrypt issued the customer certificate,
+but Nginx could not enable HTTPS because
+`/etc/letsencrypt/options-ssl-nginx.conf` was absent. This issue and recovery
+were reported by the operator; the customer VPS was not accessed as part of
+this work.
+
+### Root cause and correction
+
+- The installer installs the base Certbot package and uses `certonly
+  --webroot`; that flow does not guarantee Certbot's Nginx options file exists.
+- The HTTPS helper referenced missing Certbot TLS support files when rendering
+  the TLS site. It now atomically creates a root-owned options file with TLS
+  1.2/1.3 settings and an FFDHE 2048 parameter file before certificate
+  issuance or enabling HTTPS.
+- The helper already installs a Certbot renewal deploy hook that validates and
+  reloads Nginx and reports HTTPS status. The redundant command-line deploy
+  hook was removed so certificate issuance uses one renewal hook path. The
+  exact warning text from the customer run was not available to attribute more
+  specifically.
+- Retry flow remains on the existing activation session and reservation. The
+  helper preserves pre-existing HTTPS configuration on failure and does not
+  delete issued certificates. A still-valid certificate is reused on retry;
+  Certbot retains responsibility for normal renewal when a certificate is due.
+
+### Release and verification
+
+- PR: new PR against `main`, separate from merged PR #36; link and merge
+  result are recorded after creation.
+- Changed files: `scripts/configure-customer-https.sh`, `update.sh`,
+  `tests/test_customer_dns_https.py`, and this section.
+- `tests/test_customer_dns_https.py` and
+  `tests/test_installer_activation_resume.py`: **16 passed**.
+- Shell syntax (`bash -n install.sh update.sh
+  scripts/configure-customer-https.sh`): **passed**.
+- `git diff --check`: **passed**.
+- Embedded updater helper fallback reproducibility and byte comparison:
+  **passed** as part of the DNS/HTTPS suite.
+- **MERGED:** NO.
+- **DEPLOYED ON FASTHOSTS:** NO.
+- **AWS CUSTOMER VPS:** NOT ACCESSED OR MODIFIED. Safe update-and-resume
+  commands will be recorded in the work review; the operator must run them on
+  the customer VPS after the merged fix is available.

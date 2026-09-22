@@ -233,3 +233,80 @@ def test_failed_acme_preserves_existing_https_configuration(tmp_path: Path) -> N
     )
     assert result.returncode != 0
     assert site.read_text() == existing
+
+
+def test_https_retry_repairs_missing_tls_support_and_preserves_existing_certificate(tmp_path: Path) -> None:
+    nginx_root = tmp_path / "nginx"
+    (nginx_root / "sites-available").mkdir(parents=True)
+    (nginx_root / "sites-enabled").mkdir()
+    site = nginx_root / "sites-available" / "laymatched"
+    letsencrypt_root = tmp_path / "letsencrypt"
+    certificate_dir = letsencrypt_root / "live" / "winning-way.matched.laysports.co.uk"
+    certificate_dir.mkdir(parents=True)
+    (certificate_dir / "cert.pem").write_text("existing certificate\n")
+    (certificate_dir / "fullchain.pem").write_text("existing full chain\n")
+    (certificate_dir / "privkey.pem").write_text("existing private key\n")
+    original_certificates = {
+        name: (certificate_dir / name).read_bytes()
+        for name in ("cert.pem", "fullchain.pem", "privkey.pem")
+    }
+    challenge_root = tmp_path / "challenge"
+    state_dir = tmp_path / "state"
+    renewal_hook = tmp_path / "renewal-hooks" / "laymatched-https-report.sh"
+    certbot_args = tmp_path / "certbot-args"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "nginx").write_text(
+        "#!/bin/sh\n"
+        f"site='{site}'\n"
+        f"tls='{letsencrypt_root}/options-ssl-nginx.conf'\n"
+        f"dhparams='{letsencrypt_root}/ssl-dhparams.pem'\n"
+        "if grep -q 'listen 443' \"$site\"; then\n"
+        "  test -s \"$tls\" || exit 71\n"
+        "  test -s \"$dhparams\" || exit 75\n"
+        "  grep -q 'ssl_certificate ' \"$site\" || exit 72\n"
+        "  test -s \"$(dirname \"$tls\")/live/winning-way.matched.laysports.co.uk/fullchain.pem\" || exit 73\n"
+        "  grep -q 'ssl_dhparam ' \"$site\" || exit 74\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    (fake_bin / "systemctl").write_text("#!/bin/sh\nexit 0\n")
+    (fake_bin / "certbot").write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$@\" > '{certbot_args}'\n"
+        f"test -s '{letsencrypt_root}/options-ssl-nginx.conf' || exit 81\n"
+        f"test -s '{certificate_dir}/cert.pem' || exit 82\n"
+        "exit 0\n"
+    )
+    for command in ("nginx", "systemctl", "certbot"):
+        (fake_bin / command).chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "LAYMATCHED_INSTALLER_DIR": str(ROOT),
+        "LAYMATCHED_HOSTNAME_HELPER": str(ROOT / "tools" / "customer_hostname.py"),
+        "LAYMATCHED_NGINX_ROOT": str(nginx_root),
+        "LAYMATCHED_NGINX_SITE": str(site),
+        "LAYMATCHED_CHALLENGE_ROOT": str(challenge_root),
+        "LAYMATCHED_LETSENCRYPT_DIR": str(letsencrypt_root),
+        "LAYMATCHED_ACME_MODE": "real",
+        "ACTIVATION_STATE_DIR": str(state_dir),
+        "LAYMATCHED_RENEWAL_HOOK": str(renewal_hook),
+    }
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/configure-customer-https.sh"), "winning-way.matched.laysports.co.uk"],
+        env=environment, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    options = letsencrypt_root / "options-ssl-nginx.conf"
+    dhparams = letsencrypt_root / "ssl-dhparams.pem"
+    assert options.is_file()
+    assert "ssl_protocols TLSv1.2 TLSv1.3;" in options.read_text()
+    assert dhparams.is_file() and dhparams.stat().st_size > 0
+    assert str(options) in site.read_text()
+    assert str(dhparams) in site.read_text()
+    assert {name: (certificate_dir / name).read_bytes() for name in original_certificates} == original_certificates
+    assert "--deploy-hook" not in certbot_args.read_text()
+    hook = renewal_hook.read_text()
+    assert "nginx -t && systemctl reload nginx" in hook
+    assert "report-https" in hook
