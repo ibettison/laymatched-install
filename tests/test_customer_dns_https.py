@@ -305,6 +305,15 @@ def test_https_retry_repairs_missing_tls_support_and_preserves_existing_certific
     assert dhparams.is_file() and dhparams.stat().st_size > 0
     assert str(options) in site.read_text()
     assert str(dhparams) in site.read_text()
+    https_server = site.read_text().split("server {", 2)[2]
+    challenge_location = https_server.split("location / {", 1)[0]
+    assert "listen 443 ssl http2;" in https_server
+    assert "location ^~ /.well-known/laymatched-https/ {" in challenge_location
+    assert f"root {challenge_root};" in challenge_location
+    assert "default_type text/plain;" in challenge_location
+    assert "try_files $uri =404;" in challenge_location
+    assert "proxy_pass" not in challenge_location
+    assert "proxy_pass http://127.0.0.1:8080;" in https_server
     assert {name: (certificate_dir / name).read_bytes() for name in original_certificates} == original_certificates
     assert "--deploy-hook" not in certbot_args.read_text()
     hook = renewal_hook.read_text()
