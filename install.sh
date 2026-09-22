@@ -957,6 +957,23 @@ else
     log_error "Health check timeout reached after $MAX_WAIT seconds. LayMatched Web is not responding. Check container logs with: docker logs -f laymatched-web"
 fi
 
+run_central_activation_bootstrap() {
+    local activation_assertion_url recognition_status
+    activation_assertion_url="${AUTH_API_URL%/installer/authorize}/activation/assertions"
+    if printf '%s' "$INSTALLER_TOKEN" | python3 /opt/laymatched/provisioning-current/recognition_client.py \
+        --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" \
+        --app-version "$APP_VERSION" bootstrap --auth-url "$activation_assertion_url"; then
+        return 0
+    else
+        recognition_status=$?
+    fi
+
+    if [ "$recognition_status" -eq 2 ]; then
+        log_error "Central recognition client invocation failed locally; central authentication was not attempted. Check installer arguments."
+    fi
+    log_error "Central activation could not authenticate this installation; no customer hostname was provisioned."
+}
+
 # Reserve the customer hostname only after the customer API is healthy. The
 # central service owns nickname uniqueness and DNS credentials; the VPS only
 # receives the assigned hostname and a local certificate.
@@ -979,11 +996,7 @@ if [ "${CONFIG_ALREADY_PROVIDED}" = "false" ] || [ -z "${CUSTOMER_HOSTNAME:-}" ]
         public_ipv4=$(curl -4fsS --max-time 15 https://api.ipify.org) || \
             log_error "Unable to determine the VPS public IPv4 address. Set CUSTOMER_PUBLIC_IPV4 and rerun safely."
     fi
-    ACTIVATION_ASSERTION_URL="${AUTH_API_URL%/installer/authorize}/activation/assertions"
-    if ! printf '%s' "$INSTALLER_TOKEN" | python3 /opt/laymatched/provisioning-current/recognition_client.py bootstrap \
-        --auth-url "$ACTIVATION_ASSERTION_URL" --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION"; then
-        log_error "Central activation could not authenticate this installation; no customer hostname was provisioned."
-    fi
+    run_central_activation_bootstrap
     python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance authorized >/dev/null
     python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance nickname_reserved >/dev/null
     python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance dns_pending >/dev/null
@@ -1021,7 +1034,6 @@ if [ -n "${CUSTOMER_HOSTNAME:-}" ]; then
         complete_central_activation
     fi
 fi
-
 install_recognition_scheduler
 
 # -- Post-health persistence (rerun only) -----------------------------------
