@@ -14,6 +14,7 @@ YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ACTIVATION_STATE_DIR="/var/lib/laymatched/activation"
+LOCAL_ACTIVATION_HELPER="/opt/laymatched/local_activation.py"
 INSTALLATION_ID_FILE="/etc/laymatched/installation-id"
 ACTIVATION_SERVICE_URL="${ACTIVATION_SERVICE_URL:-}"
 
@@ -153,20 +154,42 @@ complete_central_activation() {
             --full-name "$CUSTOMER_FULL_NAME" --town-city "$CUSTOMER_TOWN_CITY" --country-code "$CUSTOMER_COUNTRY_CODE" >/dev/null || \
             log_error "Central customer profile reporting failed; activation remains incomplete."
     fi
-    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance profile_pending >/dev/null
+    advance_activation_to profile_pending
     wait_for_local_mfa
     python3 /opt/laymatched/provisioning-current/recognition_client.py \
         --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION" \
         report-mfa \
         --compose-dir /opt/laymatched >/dev/null || \
         log_error "Central MFA status reporting failed; activation remains incomplete."
-    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance mfa_pending >/dev/null
+    advance_activation_to mfa_pending
     python3 /opt/laymatched/provisioning-current/recognition_client.py \
         --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" --app-version "$APP_VERSION" \
         complete >/dev/null || \
         log_error "Central activation completion failed; the private application remains pending."
-    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance active >/dev/null
+    advance_activation_to active
     log_info "Central activation completed after verified local MFA."
+}
+
+# Advance local activation monotonically. Installer retries may revisit a
+# completed phase, so skip a target that the journal has already passed.
+advance_activation_to() {
+    local target="$1" current_stage decision
+    current_stage=$(python3 "$LOCAL_ACTIVATION_HELPER" \
+        --state-dir "$ACTIVATION_STATE_DIR" status | \
+        python3 -c 'import json,sys; print(json.load(sys.stdin)["stage"])')
+    decision=$(python3 - "$current_stage" "$target" <<'PY'
+import sys
+stages = ("installed", "authorized", "nickname_reserved", "dns_pending", "dns_ready", "https_pending", "profile_pending", "mfa_pending", "active")
+current, target = sys.argv[1:]
+if current not in stages or target not in stages:
+    raise SystemExit("unknown activation stage")
+print("skip" if stages.index(current) >= stages.index(target) else "advance")
+PY
+    )
+    if [ "$decision" = "advance" ]; then
+        python3 "$LOCAL_ACTIVATION_HELPER" \
+            --state-dir "$ACTIVATION_STATE_DIR" advance "$target" >/dev/null
+    fi
 }
 
 install_recognition_scheduler() {
@@ -1001,10 +1024,23 @@ if [ "${CONFIG_ALREADY_PROVIDED}" = "false" ] || [ -z "${CUSTOMER_HOSTNAME:-}" ]
         public_ipv4=$(curl -4fsS --max-time 15 https://api.ipify.org) || \
             log_error "Unable to determine the VPS public IPv4 address. Set CUSTOMER_PUBLIC_IPV4 and rerun safely."
     fi
-    run_central_activation_bootstrap
-    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance authorized >/dev/null
-    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance nickname_reserved >/dev/null
-    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance dns_pending >/dev/null
+    # A retry after bootstrap must reuse the existing central activation
+    # session. Bootstrap uses a fresh idempotency key, so repeating it could
+    # create a second activation for this installation.
+    if [ -f "$ACTIVATION_STATE_DIR/session.json" ]; then
+        log_info "Resuming the existing central activation session."
+    else
+        current_stage=$(python3 "$LOCAL_ACTIVATION_HELPER" \
+            --state-dir "$ACTIVATION_STATE_DIR" status | \
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["stage"])')
+        if [ "$current_stage" != "installed" ]; then
+            log_error "Activation is at $current_stage but its central session is missing; refusing to create another activation."
+        fi
+        run_central_activation_bootstrap
+    fi
+    advance_activation_to authorized
+    advance_activation_to nickname_reserved
+    advance_activation_to dns_pending
     reservation_json=$(python3 /opt/laymatched/provisioning-current/recognition_client.py \
         --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" \
         --app-version "$APP_VERSION" reserve-hostname \
@@ -1013,7 +1049,7 @@ if [ "${CONFIG_ALREADY_PROVIDED}" = "false" ] || [ -z "${CUSTOMER_HOSTNAME:-}" ]
         log_error "Customer hostname reservation/DNS readiness failed. Retry after resolving the reported central state."
     CUSTOMER_HOSTNAME=$(printf '%s' "$reservation_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hostname"])')
     CUSTOMER_NICKNAME=$(printf '%s' "$reservation_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["nickname"])')
-    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance dns_ready >/dev/null
+    advance_activation_to dns_ready
     if grep -q '^CUSTOMER_NICKNAME=' /opt/laymatched/.env; then
         sed -i "s|^CUSTOMER_NICKNAME=.*|CUSTOMER_NICKNAME=${CUSTOMER_NICKNAME}|" /opt/laymatched/.env
     else
@@ -1029,7 +1065,7 @@ fi
 if [ -n "${CUSTOMER_HOSTNAME:-}" ]; then
     LAYMATCHED_INSTALLER_DIR=/opt/laymatched \
         /bin/bash /opt/laymatched/provisioning-current/configure-customer-https.sh "$CUSTOMER_HOSTNAME"
-    python3 /opt/laymatched/local_activation.py --state-dir "$ACTIVATION_STATE_DIR" advance https_pending >/dev/null
+    advance_activation_to https_pending
     if [ "${LAYMATCHED_ACME_MODE:-real}" != "mock" ]; then
         python3 /opt/laymatched/provisioning-current/recognition_client.py \
             --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" \

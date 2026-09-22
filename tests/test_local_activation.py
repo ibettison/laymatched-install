@@ -46,7 +46,7 @@ class LocalActivationTests(unittest.TestCase):
         install_script = (Path(__file__).parents[1] / "install.sh").read_text()
         self.assertIn('recognition_client.py" /opt/laymatched/recognition_client.py', install_script)
         self.assertIn('printf \'%s\' "$INSTALLER_TOKEN"', install_script)
-        self.assertIn('ACTIVATION_ASSERTION_URL', install_script)
+        self.assertIn('activation_assertion_url', install_script)
         self.assertNotIn('central-url "$INSTALLER_TOKEN"', install_script)
 
 if __name__ == "__main__": unittest.main()

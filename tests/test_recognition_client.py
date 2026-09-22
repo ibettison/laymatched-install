@@ -138,6 +138,67 @@ class RecognitionClientTests(unittest.TestCase):
         self.assertEqual(terminal["status"], "dns_failed")
         self.assertIsNone(terminal["retry_after"])
 
+    def test_hostname_reservation_retry_reuses_existing_activation_reservation(self):
+        (self.directory / "session.json").write_text(json.dumps({
+            "activation_id": "22222222-2222-4222-8222-222222222222",
+            "access_token": "central-session", "expires_at": int(time.time()) + 900,
+        }))
+        args = type("Args", (), {
+            "state_dir": self.directory, "central_url": "https://central", "nickname": "winning-way",
+            "public_ipv4": "203.0.113.10", "challenge_root": self.directory / "challenge", "wait_seconds": 1,
+        })
+        status = {
+            "reservation_id": "33333333-3333-4333-8333-333333333333",
+            "nickname": "winning-way", "hostname": "winning-way.matched.laysports.co.uk",
+            "dns": {"status": "ready", "retry_after": None}, "reservation_expires_at": None,
+            "network_challenge": None,
+        }
+        with patch.object(recognition_client, "_ensure_session", return_value=json.loads((self.directory / "session.json").read_text())), \
+             patch.object(recognition_client, "_status", return_value=status), \
+             patch.object(recognition_client, "_request_authenticated") as authenticated:
+            self.assertEqual(recognition_client.reserve_hostname(args), 0)
+        authenticated.assert_not_called()
+        saved = json.loads((self.directory / "hostname.json").read_text())
+        self.assertEqual(saved["reservation_id"], status["reservation_id"])
+        self.assertEqual(saved["hostname"], status["hostname"])
+
+    def test_hostname_reservation_retry_rejects_a_different_nickname(self):
+        (self.directory / "session.json").write_text(json.dumps({
+            "activation_id": "22222222-2222-4222-8222-222222222222",
+            "access_token": "central-session", "expires_at": int(time.time()) + 900,
+        }))
+        args = type("Args", (), {
+            "state_dir": self.directory, "central_url": "https://central", "nickname": "another-customer",
+            "public_ipv4": "203.0.113.10", "challenge_root": self.directory / "challenge", "wait_seconds": 1,
+        })
+        status = {"reservation_id": "existing", "nickname": "winning-way", "hostname": "winning-way.matched.laysports.co.uk"}
+        with patch.object(recognition_client, "_ensure_session", return_value=json.loads((self.directory / "session.json").read_text())), \
+             patch.object(recognition_client, "_status", return_value=status), \
+             patch.object(recognition_client, "_request_authenticated") as authenticated:
+            with self.assertRaisesRegex(RuntimeError, "does not match"):
+                recognition_client.reserve_hostname(args)
+        authenticated.assert_not_called()
+
+    def test_hostname_reservation_retry_rejects_hostname_inconsistent_with_nickname(self):
+        (self.directory / "session.json").write_text(json.dumps({
+            "activation_id": "22222222-2222-4222-8222-222222222222",
+            "access_token": "central-session", "expires_at": int(time.time()) + 900,
+        }))
+        args = type("Args", (), {
+            "state_dir": self.directory, "central_url": "https://central", "nickname": "winning-way",
+            "public_ipv4": "203.0.113.10", "challenge_root": self.directory / "challenge", "wait_seconds": 1,
+        })
+        status = {
+            "reservation_id": "existing", "nickname": "winning-way",
+            "hostname": "different-customer.matched.laysports.co.uk",
+        }
+        with patch.object(recognition_client, "_ensure_session", return_value=json.loads((self.directory / "session.json").read_text())), \
+             patch.object(recognition_client, "_status", return_value=status), \
+             patch.object(recognition_client, "_request_authenticated") as authenticated:
+            with self.assertRaisesRegex(RuntimeError, "does not match"):
+                recognition_client.reserve_hostname(args)
+        authenticated.assert_not_called()
+
     def test_mfa_report_reads_verified_state_from_customer_api_database(self):
         session = {"activation_id": "22222222-2222-4222-8222-222222222222", "access_token": "central-session", "version": 4}
         args = type("Args", (), {
