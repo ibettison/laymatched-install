@@ -90,6 +90,12 @@ jobs:
             echo 'Candidate final version does not match application RELEASE.md policy'; exit 1;
           }
 
+      - name: Verify generated customer web health check and routing contract
+        working-directory: installer
+        env:
+          LAYMATCHED_APP_REPO: ${{ github.workspace }}/application
+        run: python -m unittest tests.test_customer_web_health_contract -v
+
       - name: Set up Python for the complete backend suite
         uses: actions/setup-python@v5
         with:
