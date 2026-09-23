@@ -458,9 +458,9 @@ def reserve_hostname(args) -> int:
     lease_deadline = _expiry_monotonic_deadline(
         reservation.get("reservation_expires_at"), monotonic_now=now
     )
-    # The central API grants a 15-minute reservation and permits each safe
-    # renewal to add at most 30 minutes. Allow one such bounded renewal horizon,
-    # with time reserved to send it before the current lease expires.
+    # The central API grants a 15-minute lease; renewal replaces expiry with
+    # request-time + up to 30 minutes. Allow one renewal horizon, reserving
+    # 30 seconds for the renewal request and 30 seconds for worker completion.
     hard_deadline = soft_deadline if lease_deadline is None else (
         lease_deadline + DNS_RESERVATION_RENEWAL_SECONDS
         - DNS_RETRY_COMPLETION_GRACE_SECONDS - DNS_RENEWAL_REQUEST_SAFETY_SECONDS
@@ -492,7 +492,11 @@ def reserve_hostname(args) -> int:
             if lease_deadline is None:
                 effective_deadline = min(effective_deadline, soft_deadline)
             elif retry_completion_deadline > lease_deadline:
-                renewal_at = max(now, retry_completion_deadline - DNS_RESERVATION_RENEWAL_SECONDS)
+                renewal_at = max(
+                    now,
+                    retry_completion_deadline - DNS_RESERVATION_RENEWAL_SECONDS
+                    - DNS_RENEWAL_REQUEST_SAFETY_SECONDS,
+                )
                 if renewal_at + DNS_RENEWAL_REQUEST_SAFETY_SECONDS >= lease_deadline:
                     raise _dns_wait_timeout(reservation, hard_bound=True)
 
