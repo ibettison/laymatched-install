@@ -784,6 +784,12 @@ func authorizeHandler(c *gin.Context) {
 		return
 	}
 
+	if strings.TrimSpace(cfg.ActivationURL) == "" {
+		logError(c, http.StatusServiceUnavailable, tokenPrefix, "activation service URL is not configured")
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "activation service unavailable"})
+		return
+	}
+
 	approved := refreshApprovedVersion()
 	if approved == "" {
 		logError(c, http.StatusServiceUnavailable, tokenPrefix, "approved release unavailable")

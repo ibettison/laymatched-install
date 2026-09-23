@@ -2738,6 +2738,12 @@ Installer Token pulls, then atomically replaces `approved_release.json` and
 back. The exact same digests flow from candidate manifest through AWS
 acceptance and live approval.
 
+Rebasing onto current main exposed an Auth API regression: the release identity
+response change had dropped the existing fail-closed check for an empty
+activation-service URL. The guard is restored before approved-version
+authorization, and the existing missing-URL regression is included in the
+passing full Go suite.
+
 The installer reader has executable tests for candidate/final version
 consistency, source SHA, registry and image-reference/digest matching. The
 workflow has serialization by candidate/release version and refuses existing

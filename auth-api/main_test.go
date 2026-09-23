@@ -228,7 +228,7 @@ func TestAuthorizeReturnsMatchingApprovedArtifactDigests(t *testing.T) {
 	defer cleanup()
 	priv, pub := generateTestKeys(t)
 	privateKey, publicKey = priv, pub
-	cfg = Config{RegistryURL: "registry.matched.laysports.co.uk", RateLimitPerMin: 1000}
+	cfg = Config{RegistryURL: "registry.matched.laysports.co.uk", ActivationURL: "https://matched.laysports.co.uk", RateLimitPerMin: 1000}
 	db = testDB
 	token := "lm_inst_digestmetadata1234567890"
 	insertTestToken(t, testDB, "customer-1", token, false, false)
@@ -851,6 +851,7 @@ func TestApprovedVersionChange(t *testing.T) {
 
 	cfg = Config{
 		RegistryURL:     "registry.matched.laysports.co.uk",
+		ActivationURL:   "https://matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	router := setupRouter()
