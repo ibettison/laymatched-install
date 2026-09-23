@@ -174,7 +174,7 @@ class RecognitionClientTests(unittest.TestCase):
         status = {
             "reservation_id": "33333333-3333-4333-8333-333333333333",
             "nickname": "aws-acceptance", "hostname": "aws-acceptance.matched.laysports.co.uk",
-            "dns": {"status": "pending", "retry_after": 30}, "reservation_expires_at": None,
+            "dns": {"status": "pending", "retry_after": None}, "reservation_expires_at": None,
             "network_challenge": None,
         }
         clock = [0.0]
@@ -188,13 +188,170 @@ class RecognitionClientTests(unittest.TestCase):
              patch.object(recognition_client.time, "monotonic", side_effect=lambda: clock[0]), \
              patch.object(recognition_client.time, "sleep", side_effect=sleep), \
              patch("sys.stderr", output):
-            with self.assertRaisesRegex(RuntimeError, "bounded retry window"):
+            with self.assertRaisesRegex(RuntimeError, "initial wait limit"):
                 recognition_client.reserve_hostname(args)
         messages = output.getvalue()
         self.assertIn("[INFO] Waiting for your LayMatched hostname/DNS to become ready...", messages)
         self.assertIn("[INFO] This can take several minutes. The installer is still running — please do not close this window.", messages)
         self.assertIn("[WAIT] Still waiting for DNS... 30 seconds elapsed", messages)
         self.assertIn("[WAIT] Still waiting for DNS... 60 seconds elapsed", messages)
+
+    def test_retry_after_extends_wait_beyond_original_300_second_deadline(self):
+        (self.directory / "session.json").write_text(json.dumps({
+            "activation_id": "22222222-2222-4222-8222-222222222222",
+            "access_token": "central-session", "expires_at": int(time.time()) + 900,
+        }))
+        args = type("Args", (), {
+            "state_dir": self.directory, "central_url": "https://central", "nickname": "aws-acceptance",
+            "public_ipv4": "203.0.113.10", "challenge_root": self.directory / "challenge", "wait_seconds": 300,
+        })
+        expiry = (recognition_client.dt.datetime.now(recognition_client.dt.timezone.utc) + recognition_client.dt.timedelta(seconds=900)).isoformat()
+        clock = [0.0]
+        status_calls = []
+
+        def status(*_args, **_kwargs):
+            status_calls.append(clock[0])
+            if clock[0] >= 350:
+                dns = {"status": "ready", "retry_after": None}
+            else:
+                dns = {"status": "failed", "retry_after": max(1, int(350 - clock[0]))}
+            return {
+                "version": 7, "reservation_id": "reservation-1", "nickname": "aws-acceptance",
+                "hostname": "aws-acceptance.matched.laysports.co.uk", "reservation_expires_at": expiry,
+                "network_challenge": None, "dns": dns,
+            }
+
+        output = io.StringIO()
+        with patch.object(recognition_client, "_ensure_session", return_value=json.loads((self.directory / "session.json").read_text())), \
+             patch.object(recognition_client, "_status", side_effect=status), \
+             patch.object(recognition_client.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(recognition_client.time, "sleep", side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)), \
+             patch("sys.stderr", output):
+            self.assertEqual(recognition_client.reserve_hostname(args), 0)
+        self.assertGreaterEqual(clock[0], 350)
+        self.assertGreater(clock[0], 300)
+        self.assertEqual(json.loads((self.directory / "hostname.json").read_text())["status"], "dns_ready")
+        self.assertTrue(any(value >= 300 for value in status_calls))
+        self.assertIn("Central has scheduled another DNS check", output.getvalue())
+
+    def test_due_progress_is_emitted_before_a_slow_status_request(self):
+        (self.directory / "session.json").write_text(json.dumps({
+            "activation_id": "22222222-2222-4222-8222-222222222222",
+            "access_token": "central-session", "expires_at": int(time.time()) + 900,
+        }))
+        args = type("Args", (), {
+            "state_dir": self.directory, "central_url": "https://central", "nickname": "aws-acceptance",
+            "public_ipv4": "203.0.113.10", "challenge_root": self.directory / "challenge", "wait_seconds": 120,
+        })
+        expiry = (recognition_client.dt.datetime.now(recognition_client.dt.timezone.utc) + recognition_client.dt.timedelta(seconds=900)).isoformat()
+        clock = [0.0]
+        output = io.StringIO()
+        calls = [0]
+
+        def status(*_args, **_kwargs):
+            calls[0] += 1
+            if calls[0] == 1:
+                return {
+                    "version": 2, "reservation_id": "reservation-1", "nickname": "aws-acceptance",
+                    "hostname": "aws-acceptance.matched.laysports.co.uk", "reservation_expires_at": expiry,
+                    "network_challenge": None, "dns": {"status": "failed", "retry_after": 30},
+                }
+            self.assertIn("[WAIT] Still waiting for DNS... 30 seconds elapsed", output.getvalue())
+            clock[0] += 45  # model a slow status request after checking its pre-call output
+            return {
+                "version": 3, "reservation_id": "reservation-1", "nickname": "aws-acceptance",
+                "hostname": "aws-acceptance.matched.laysports.co.uk", "reservation_expires_at": expiry,
+                "network_challenge": None, "dns": {"status": "ready", "retry_after": None},
+            }
+
+        with patch.object(recognition_client, "_ensure_session", return_value=json.loads((self.directory / "session.json").read_text())), \
+             patch.object(recognition_client, "_status", side_effect=status), \
+             patch.object(recognition_client.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(recognition_client.time, "sleep", side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)), \
+             patch("sys.stderr", output):
+            self.assertEqual(recognition_client.reserve_hostname(args), 0)
+
+    def test_retry_beyond_lease_and_single_renewal_horizon_fails_cleanly(self):
+        (self.directory / "session.json").write_text(json.dumps({
+            "activation_id": "22222222-2222-4222-8222-222222222222",
+            "access_token": "central-session", "expires_at": int(time.time()) + 900,
+        }))
+        args = type("Args", (), {
+            "state_dir": self.directory, "central_url": "https://central", "nickname": "aws-acceptance",
+            "public_ipv4": "203.0.113.10", "challenge_root": self.directory / "challenge", "wait_seconds": 300,
+        })
+        expiry = (recognition_client.dt.datetime.now(recognition_client.dt.timezone.utc) + recognition_client.dt.timedelta(seconds=900)).isoformat()
+        status = {
+            "version": 4, "reservation_id": "reservation-1", "nickname": "aws-acceptance",
+            "hostname": "aws-acceptance.matched.laysports.co.uk", "reservation_expires_at": expiry,
+            "network_challenge": None, "dns": {"status": "failed", "retry_after": 10000},
+        }
+        with patch.object(recognition_client, "_ensure_session", return_value=json.loads((self.directory / "session.json").read_text())), \
+             patch.object(recognition_client, "_status", return_value=status), \
+             patch.object(recognition_client, "_request_authenticated") as request:
+            with self.assertRaisesRegex(RuntimeError, "next central retry cannot complete"):
+                recognition_client.reserve_hostname(args)
+        request.assert_not_called()
+
+    def test_retry_wait_renews_reservation_safely_with_current_version(self):
+        (self.directory / "session.json").write_text(json.dumps({
+            "activation_id": "22222222-2222-4222-8222-222222222222",
+            "access_token": "central-session", "expires_at": int(time.time()) + 900,
+        }))
+        args = type("Args", (), {
+            "state_dir": self.directory, "central_url": "https://central", "nickname": "aws-acceptance",
+            "public_ipv4": "203.0.113.10", "challenge_root": self.directory / "challenge", "wait_seconds": 300,
+        })
+        clock = [0.0]
+        renewal_done = [False]
+
+        def status(*_args, **_kwargs):
+            ready = clock[0] >= 1000
+            expiry_seconds = 900 if ready or not renewal_done[0] else 1800
+            expiry = (recognition_client.dt.datetime.now(recognition_client.dt.timezone.utc) + recognition_client.dt.timedelta(seconds=expiry_seconds)).isoformat()
+            return {
+                "version": 8, "reservation_id": "reservation-1", "nickname": "aws-acceptance",
+                "hostname": "aws-acceptance.matched.laysports.co.uk", "reservation_expires_at": expiry,
+                "network_challenge": None,
+                "dns": {"status": "ready", "retry_after": None} if ready else {"status": "failed", "retry_after": max(1, int(1000 - clock[0]))},
+            }
+
+        def renew(*_args, **kwargs):
+            renewal_done[0] = True
+            self.assertEqual(kwargs["method"], "POST")
+            self.assertEqual(kwargs["body"], {"requested_extension_seconds": 1800})
+            self.assertEqual(kwargs["extra_headers"]["If-Match"], '"8"')
+            return ({"reservation_expires_at": (recognition_client.dt.datetime.now(recognition_client.dt.timezone.utc) + recognition_client.dt.timedelta(seconds=1800)).isoformat()}, json.loads((self.directory / "session.json").read_text()))
+
+        with patch.object(recognition_client, "_ensure_session", return_value=json.loads((self.directory / "session.json").read_text())), \
+             patch.object(recognition_client, "_status", side_effect=status), \
+             patch.object(recognition_client, "_request_authenticated", side_effect=renew) as request, \
+             patch.object(recognition_client.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(recognition_client.time, "sleep", side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)), \
+             patch("sys.stderr", io.StringIO()):
+            self.assertEqual(recognition_client.reserve_hostname(args), 0)
+        request.assert_called_once()
+        self.assertGreaterEqual(clock[0], 1000)
+
+    def test_terminal_dns_failure_has_distinct_actionable_message(self):
+        (self.directory / "session.json").write_text(json.dumps({
+            "activation_id": "22222222-2222-4222-8222-222222222222",
+            "access_token": "central-session", "expires_at": int(time.time()) + 900,
+        }))
+        args = type("Args", (), {
+            "state_dir": self.directory, "central_url": "https://central", "nickname": "aws-acceptance",
+            "public_ipv4": "203.0.113.10", "challenge_root": self.directory / "challenge", "wait_seconds": 300,
+        })
+        status = {
+            "version": 4, "reservation_id": "reservation-1", "nickname": "aws-acceptance",
+            "hostname": "aws-acceptance.matched.laysports.co.uk", "reservation_expires_at": None,
+            "network_challenge": None, "dns": {"status": "failed", "retry_after": None},
+        }
+        with patch.object(recognition_client, "_ensure_session", return_value=json.loads((self.directory / "session.json").read_text())), \
+             patch.object(recognition_client, "_status", return_value=status):
+            with self.assertRaisesRegex(RuntimeError, "terminally; central reports no retry") as raised:
+                recognition_client.reserve_hostname(args)
+        self.assertIn("contact LayMatched support", str(raised.exception))
 
     def test_hostname_reservation_retry_rejects_a_different_nickname(self):
         (self.directory / "session.json").write_text(json.dumps({
