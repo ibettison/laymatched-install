@@ -2600,3 +2600,64 @@ the application proxy.
   unavailable.
 - Fasthosts deployment: not performed; no documented installer deployment
   target/procedure was available. AWS was not accessed or modified.
+
+### Customer application release and login-route acceptance follow-up (2026-09-23)
+
+The operator reported that the disposable AWS install reached MFA onboarding
+with API and web image tags `v0.1.1`. The installer prompt pointed to the
+customer hostname root, which returned Nginx 404; `/app` returned a login
+screen. The operator stopped before completing activation because that image
+was identified as an old application version. AWS was not accessed for this
+review; these observations are operator-provided evidence.
+
+### Root cause and correction
+
+- The installer has no `v0.1.1` fallback. Fresh install and resume both use
+  `approved_version` returned by the authorization API. Resume writes that
+  approved tag and registry to a candidate environment, pulls both images,
+  runs Compose `up -d`, and only persists the candidate version after health
+  checks. Therefore an old healthy local image is not intentionally accepted
+  in place of the authorized tag.
+- The authorization API reads its approved tag from central
+  `approved_version.txt`; the release workflow supplies that value from its
+  explicitly approved version input. The observed image tag is consistent
+  with the value served by that release contract, but this review did not read
+  live central approval metadata or inspect the AWS containers. The exact
+  approved current tag and image digests remain to be confirmed through the
+  operator's approved release record. No replacement tag is guessed here.
+- The current application customer Nginx configuration serves its SPA at `/`
+  and retains `/app/` compatibility. It uses `/app/` as the build base and
+  rewrites that compatibility route to the root app. The MFA prompt's root
+  URL matches that contract; the reported 404 indicates the deployed web
+  image did not satisfy the current customer artifact contract.
+- The installer now checks the HTTPS customer root locally, with the
+  customer hostname and TLS SNI preserved, after central HTTPS proof and
+  before profile/MFA onboarding. It requires the customer SPA root element
+  and emits only a generic error if the route is unavailable. This prevents
+  onboarding or activation completion against an old or incorrectly routed
+  image while leaving the existing activation session, hostname reservation,
+  certificate, and customer data untouched.
+- Both fresh and resumed image selection remain bound to the authorization
+  API's approved tag; resumed installs pull that version and Compose recreates
+  services when the image changes. The route check is read-only and retries
+  remain on the existing activation session.
+
+### Focused verification
+
+- Added installer regressions for fresh approved image selection, stale-image
+  resume selection and recreation, HTTPS root login-route validation, and
+  preventing profile/MFA onboarding until that route passes.
+- Existing activation-resume tests cover forward-only journal stages and
+  reuse of the existing central activation session. Existing HTTPS retry
+  tests verify existing certificates are retained.
+- Direct focused regression invocation: **7 passed**, including fresh/resumed
+  approved-tag deployment, root route success/failure, read-only preservation
+  of activation session/certificate, and certificate reuse. Installer retry
+  unittest: **4 passed**. Shell syntax and `git diff --check`: **passed**.
+- `pytest` could not run because it is not installed. Installation in an
+  isolated `/tmp` virtual environment failed because package DNS was
+  unavailable; the focused pytest-style test functions were invoked directly.
+- No AWS, central approval file, registry credentials, customer tokens, or
+  live activation state were accessed. Local checks do not establish AWS
+  acceptance; the operator must rerun safely after confirming the approved
+  application tag/digests and then verify `/` before completing MFA.
