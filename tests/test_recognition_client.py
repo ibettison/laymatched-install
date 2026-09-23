@@ -1,4 +1,6 @@
 import base64
+import email.message
+import hashlib
 import io
 import json
 import os
@@ -145,6 +147,95 @@ class RecognitionClientTests(unittest.TestCase):
         with patch("sys.stderr", logged):
             print(f"central recognition error: {raised.exception}", file=sys.stderr)
         self.assertIn("HTTP 503", logged.getvalue())
+
+    def test_http_wrappers_retain_only_safe_activation_error_classification(self):
+        body_secret = b"response-secret bearer-token signature nonce"
+        methods = (recognition_client._get, recognition_client._post,
+                   recognition_client._put, recognition_client._patch)
+        for wrapper in methods:
+            with self.subTest(wrapper=wrapper.__name__):
+                headers = email.message.Message()
+                headers["X-Activation-Error"] = "invalid_signature"
+                response_body = io.BytesIO(body_secret)
+                http_error = urllib.error.HTTPError(
+                    "https://central.example.test/resource", 401, "rejected", headers, response_body
+                )
+                with patch.object(recognition_client.urllib.request, "urlopen", side_effect=http_error):
+                    with self.assertRaises(recognition_client.RecognitionHTTPError) as raised:
+                        if wrapper == recognition_client._get:
+                            wrapper("https://central.example.test/resource", {"Authorization": "Bearer request-token"})
+                        else:
+                            wrapper("https://central.example.test/resource", {}, {"Authorization": "Bearer request-token"})
+                error = raised.exception
+                self.assertEqual(error.status, 401)
+                self.assertEqual(error.activation_error, "invalid_signature")
+                self.assertEqual(str(error), "central recognition request failed with HTTP 401 (invalid_signature)")
+                self.assertIsNone(error.__cause__)
+                self.assertEqual(response_body.tell(), 0)
+                for secret in (body_secret.decode(), "Authorization", "Bearer", "request-token", "session-token", "nonce-value"):
+                    self.assertNotIn(secret, str(error))
+
+    def test_malformed_and_overlong_activation_error_classifications_are_discarded(self):
+        for classification in ("Invalid Signature", "invalid/signature", "invalid_signature\nsecret", "a" * 65):
+            with self.subTest(classification=classification):
+                headers = email.message.Message()
+                headers["X-Activation-Error"] = classification
+                http_error = urllib.error.HTTPError(
+                    "https://central.example.test/resource", 401, "rejected", headers, io.BytesIO(b"secret body")
+                )
+                with patch.object(recognition_client.urllib.request, "urlopen", side_effect=http_error):
+                    with self.assertRaises(recognition_client.RecognitionHTTPError) as raised:
+                        recognition_client._get("https://central.example.test/resource", {})
+                self.assertIsNone(raised.exception.activation_error)
+                self.assertEqual(str(raised.exception), "central recognition request failed with HTTP 401")
+                self.assertNotIn(classification, str(raised.exception))
+
+    def test_mfa_put_uses_expected_path_method_body_and_signing_inputs(self):
+        activation_id = "22222222-2222-4222-8222-222222222222"
+        session = {"activation_id": activation_id, "access_token": "session-token",
+                   "expires_at": int(time.time()) + 900}
+        path = f"/v1/activations/{activation_id}/mfa-status"
+        body = {"enabled": True, "method": "totp", "verified_at": "2026-09-23T18:19:00Z",
+                "recovery_codes_generated": True, "local_security_version": 7}
+        encoded = json.dumps(body, separators=(",", ":"), sort_keys=True).encode()
+        args = type("Args", (), {"central_url": "https://central"})
+        with patch.object(recognition_client, "_put", return_value={}) as put, \
+             patch.object(recognition_client, "_canonical_signature", wraps=recognition_client._canonical_signature) as signer:
+            result, returned_session = recognition_client._request_authenticated(
+                args, self.directory, session, method="PUT", path=path, body=body,
+                operation="MFA status", retry_deadline=time.monotonic() + 10,
+            )
+        self.assertEqual(result, {})
+        self.assertIs(returned_session, session)
+        self.assertEqual(put.call_args.args[0], f"https://central{path}")
+        self.assertEqual(put.call_args.args[1], body)
+        request_headers = put.call_args.args[2]
+        self.assertEqual(request_headers["Authorization"], "Bearer session-token")
+        self.assertEqual(signer.call_args.args[:3], (self.directory, "PUT", path))
+        self.assertEqual(signer.call_args.args[3], encoded)
+        self.assertEqual(hashlib.sha256(signer.call_args.args[3]).hexdigest(), hashlib.sha256(encoded).hexdigest())
+
+    def test_authenticated_401_still_renews_once_and_reports_final_classification(self):
+        activation_id = "22222222-2222-4222-8222-222222222222"
+        session = {"activation_id": activation_id, "access_token": "old-session",
+                   "expires_at": int(time.time()) + 900}
+        refreshed = {"activation_id": activation_id, "access_token": "new-session",
+                     "expires_at": int(time.time()) + 900}
+        args = type("Args", (), {"central_url": "https://central"})
+        with patch.object(recognition_client, "_put", side_effect=[
+                recognition_client.RecognitionHTTPError(401, "invalid_signature"),
+                recognition_client.RecognitionHTTPError(401, "invalid_credential")]) as put, \
+             patch.object(recognition_client, "_resume_session", return_value=refreshed) as resume:
+            with self.assertRaises(recognition_client.RecognitionHTTPError) as raised:
+                recognition_client._request_authenticated(
+                    args, self.directory, session, method="PUT", path="/v1/activations/activation/mfa-status",
+                    body={"enabled": True}, operation="MFA status", retry_deadline=time.monotonic() + 10,
+                )
+        self.assertEqual(put.call_count, 2)
+        self.assertEqual(resume.call_count, 1)
+        self.assertEqual(put.call_args_list[0].args[2]["Authorization"], "Bearer old-session")
+        self.assertEqual(put.call_args_list[1].args[2]["Authorization"], "Bearer new-session")
+        self.assertEqual(str(raised.exception), "central recognition request failed with HTTP 401 (invalid_credential)")
 
     def test_retry_exhaustion_reports_connection_category_without_exception_details(self):
         sensitive = "https://installer:secret@example.test/path assertion=installer-assertion headers={'Authorization': 'Bearer token'} body=response-secret"
