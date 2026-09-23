@@ -109,6 +109,18 @@ read_local_mfa_status() {
     (cd /opt/laymatched && docker compose exec -T api python3 -m app.customer_activation_status)
 }
 
+verify_customer_login_route() {
+    local homepage_html
+    homepage_html=$(curl --silent --fail --max-time 15 \
+        --resolve "${CUSTOMER_HOSTNAME}:443:127.0.0.1" \
+        "https://${CUSTOMER_HOSTNAME}/" 2>/dev/null) || \
+        log_error "The approved customer application is not serving its login page at the customer root URL; activation remains pending."
+    if ! printf '%s' "$homepage_html" | grep -Fq '<div id="root"></div>'; then
+        log_error "The approved customer application did not return the expected login page at the customer root URL; activation remains pending."
+    fi
+    log_info "Customer login page verified at https://${CUSTOMER_HOSTNAME}/."
+}
+
 wait_for_local_mfa() {
     local wait_seconds="${ACTIVATION_MFA_WAIT_SECONDS:-900}"
     local elapsed=0
@@ -1074,6 +1086,7 @@ if [ -n "${CUSTOMER_HOSTNAME:-}" ]; then
             --certificate "/etc/letsencrypt/live/$CUSTOMER_HOSTNAME/cert.pem" \
             --challenge-root /var/www/letsencrypt >/dev/null || \
             log_error "Central HTTPS verification failed; the installation remains pending and must be retried safely."
+        verify_customer_login_route
         complete_central_activation
     fi
 fi
