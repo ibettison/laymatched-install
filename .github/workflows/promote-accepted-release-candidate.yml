@@ -1,0 +1,257 @@
+name: Promote AWS-Accepted LayMatched Release Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Final version defined by the application release policy'
+        required: true
+        type: string
+      candidate_version:
+        description: 'Immutable candidate tested on AWS, for example v0.2.0-rc.1'
+        required: true
+        type: string
+      sha:
+        description: 'Exact 40-character application source SHA accepted on AWS'
+        required: true
+        type: string
+      api_image_digest:
+        description: 'Candidate API sha256 digest from its manifest'
+        required: true
+        type: string
+      web_image_digest:
+        description: 'Candidate web sha256 digest from its manifest'
+        required: true
+        type: string
+      aws_acceptance_evidence:
+        description: 'JSON AWS acceptance record containing every required passed gate and exact candidate identity'
+        required: true
+        type: string
+      registry_url:
+        description: 'Private registry hostname'
+        required: false
+        default: 'registry.matched.laysports.co.uk'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  promote_accepted_candidate:
+    name: Promote the exact AWS-accepted image digests and approve
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    concurrency:
+      group: laymatched-live-promotion-${{ inputs.release_version }}
+      cancel-in-progress: false
+    env:
+      REGISTRY_URL: ${{ inputs.registry_url }}
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      RELEASE_VERSION: ${{ inputs.release_version }}
+      CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+      SOURCE_SHA: ${{ inputs.sha }}
+      API_DIGEST: ${{ inputs.api_image_digest }}
+      WEB_DIGEST: ${{ inputs.web_image_digest }}
+    steps:
+      - name: Validate owner-approved candidate identity
+        shell: bash
+        env:
+          AWS_ACCEPTANCE_EVIDENCE: ${{ inputs.aws_acceptance_evidence }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid final release version'; exit 1; }
+          [[ "$CANDIDATE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[1-9][0-9]*$ ]] || { echo 'Invalid candidate version'; exit 1; }
+          candidate_base="$CANDIDATE_VERSION"
+          candidate_base="${candidate_base%-rc.*}"
+          test "$candidate_base" = "$RELEASE_VERSION" || { echo 'Candidate and final versions do not match'; exit 1; }
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'SHA must be 40 lowercase hex characters'; exit 1; }
+          [[ "$API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'Invalid API image digest'; exit 1; }
+          [[ "$WEB_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'Invalid web image digest'; exit 1; }
+          [[ "$REGISTRY_URL" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || { echo 'Invalid Registry URL'; exit 1; }
+          test -n "$VPS_HOST" || { echo 'VPS_HOST is required to record live production approval'; exit 1; }
+          test -n "$AWS_ACCEPTANCE_EVIDENCE" || { echo 'AWS acceptance evidence is required'; exit 1; }
+          printf '%s' "$AWS_ACCEPTANCE_EVIDENCE" > aws-acceptance-record.json
+          jq -e --arg candidate "$CANDIDATE_VERSION" --arg sha "$SOURCE_SHA" \
+            --arg api "$API_DIGEST" --arg web "$WEB_DIGEST" '
+              .candidate_version == $candidate and .source_sha == $sha and
+              .api_image_digest == $api and .web_image_digest == $web and
+              .clean_customer_installation == true and .artifacts_verified == true and
+              .dns == true and .https == true and .activation == true and
+              .login == true and .mfa == true and .current_ui_functionality == true and
+              .expected_public_routes == true and .normal_startup_operation == true and
+              .owner_accepted == true
+            ' aws-acceptance-record.json >/dev/null || {
+              echo 'AWS acceptance record is invalid, incomplete, or for different candidate artifacts'; exit 1;
+            }
+
+      - name: Retain AWS acceptance record with the promotion run
+        uses: actions/upload-artifact@v4
+        with:
+          name: aws-acceptance-${{ inputs.candidate_version }}
+          path: aws-acceptance-record.json
+          if-no-files-found: error
+          retention-days: 365
+
+      - name: Log in to owner registry for candidate pull and promotion
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry_url }}
+          username: laymatched-owner
+          password: ${{ secrets.OWNER_TOKEN }}
+
+      - name: Pull and verify the exact AWS-accepted candidate digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_candidate="$REGISTRY_URL/laymatched-api-staging@$API_DIGEST"
+          web_candidate="$REGISTRY_URL/laymatched-web-staging@$WEB_DIGEST"
+          docker pull "$api_candidate"
+          docker pull "$web_candidate"
+          api_sha="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$api_candidate")"
+          web_sha="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$web_candidate")"
+          test "$api_sha" = "$SOURCE_SHA"
+          test "$web_sha" = "$SOURCE_SHA"
+
+      - name: Refuse to overwrite any customer release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          assert_tag_absent() {
+            local ref="$1" error_file
+            error_file="$(mktemp)"
+            if docker pull "$ref" >/dev/null 2>"$error_file"; then
+              echo "Refusing to overwrite existing customer image $ref" >&2
+              rm -f "$error_file"
+              return 1
+            fi
+            if ! grep -Eqi 'manifest unknown|manifest not found' "$error_file"; then
+              cat "$error_file" >&2
+              rm -f "$error_file"
+              echo "Could not prove release tag is unused: $ref" >&2
+              return 1
+            fi
+            rm -f "$error_file"
+          }
+          assert_tag_absent "$REGISTRY_URL/laymatched-api:$RELEASE_VERSION"
+          assert_tag_absent "$REGISTRY_URL/laymatched-web:$RELEASE_VERSION"
+
+      - name: Install manifest-preserving registry copier
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes skopeo
+
+      - name: Promote the exact candidate digests without rebuilding
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_candidate="$REGISTRY_URL/laymatched-api-staging@$API_DIGEST"
+          web_candidate="$REGISTRY_URL/laymatched-web-staging@$WEB_DIGEST"
+          api_release="$REGISTRY_URL/laymatched-api:$RELEASE_VERSION"
+          web_release="$REGISTRY_URL/laymatched-web:$RELEASE_VERSION"
+          skopeo copy --all --preserve-digests "docker://$api_candidate" "docker://$api_release"
+          skopeo copy --all --preserve-digests "docker://$web_candidate" "docker://$web_release"
+          docker pull "$api_release"
+          docker pull "$web_release"
+          api_promoted_digest="$(skopeo inspect --raw "docker://$api_release" | sha256sum | awk '{print "sha256:" $1}')"
+          web_promoted_digest="$(skopeo inspect --raw "docker://$web_release" | sha256sum | awk '{print "sha256:" $1}')"
+          test "$api_promoted_digest" = "$API_DIGEST"
+          test "$web_promoted_digest" = "$WEB_DIGEST"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$api_release")" = "$SOURCE_SHA"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$web_release")" = "$SOURCE_SHA"
+
+      - name: Log in with customer Installer Token
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry_url }}
+          username: laymatched-installer
+          password: ${{ secrets.TEST_INSTALLER_TOKEN }}
+
+      - name: Verify installer pulls return the same accepted digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_release="$REGISTRY_URL/laymatched-api:$RELEASE_VERSION"
+          web_release="$REGISTRY_URL/laymatched-web:$RELEASE_VERSION"
+          docker pull "$api_release"
+          docker pull "$web_release"
+          api_installer_digest="$(skopeo inspect --raw "docker://$api_release" | sha256sum | awk '{print "sha256:" $1}')"
+          web_installer_digest="$(skopeo inspect --raw "docker://$web_release" | sha256sum | awk '{print "sha256:" $1}')"
+          test "$api_installer_digest" = "$API_DIGEST"
+          test "$web_installer_digest" = "$WEB_DIGEST"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$api_release")" = "$SOURCE_SHA"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$web_release")" = "$SOURCE_SHA"
+
+      - name: Prepare exact approved release record
+        id: release_record
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -cn \
+            --arg version "$RELEASE_VERSION" \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg api_image_digest "$API_DIGEST" \
+            --arg web_image_digest "$WEB_DIGEST" \
+            '{version:$version,source_sha:$source_sha,api_image_digest:$api_image_digest,web_image_digest:$web_image_digest}' > approved_release.json
+          echo "json=$(cat approved_release.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Record production approval after AWS owner acceptance
+        uses: appleboy/ssh-action@v1
+        env:
+          APPROVED_VERSION: ${{ inputs.release_version }}
+          APPROVED_RELEASE_JSON: ${{ steps.release_record.outputs.json }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: APPROVED_VERSION,APPROVED_RELEASE_JSON
+          script: |
+            sudo env APPROVED_VERSION="$APPROVED_VERSION" APPROVED_RELEASE_JSON="$APPROVED_RELEASE_JSON" sh -c '
+              set -eu
+              approval_dir=/opt/laymatched-auth/approval
+              manifest_tmp="$(mktemp "$approval_dir/.approved_release.XXXXXX")"
+              version_tmp="$(mktemp "$approval_dir/.approved_version.XXXXXX")"
+              trap "rm -f \"$manifest_tmp\" \"$version_tmp\"" EXIT
+              printf "%s\\n" "$APPROVED_RELEASE_JSON" > "$manifest_tmp"
+              printf "%s\\n" "$APPROVED_VERSION" > "$version_tmp"
+              chown root:root "$manifest_tmp" "$version_tmp"
+              chmod 0644 "$manifest_tmp" "$version_tmp"
+              mv -f "$manifest_tmp" "$approval_dir/approved_release.json"
+              mv -f "$version_tmp" "$approval_dir/approved_version.txt"
+              trap - EXIT
+            '
+
+      - name: Verify live authorization reports exact approved image digests
+        shell: bash
+        env:
+          TEST_INSTALLER_TOKEN: ${{ secrets.TEST_INSTALLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg token "$TEST_INSTALLER_TOKEN" '{installer_token:$token}')"
+          for attempt in $(seq 1 12); do
+            response="$(curl -fsS -H 'Content-Type: application/json' -d "$payload" https://auth.matched.laysports.co.uk/installer/authorize)"
+            approved_version="$(jq -r '.approved_version' <<< "$response")"
+            api_digest="$(jq -r '.api_image_digest' <<< "$response")"
+            web_digest="$(jq -r '.web_image_digest' <<< "$response")"
+            source_sha="$(jq -r '.source_sha' <<< "$response")"
+            if [ "$approved_version" = "$RELEASE_VERSION" ] \
+              && [ "$api_digest" = "$API_DIGEST" ] \
+              && [ "$web_digest" = "$WEB_DIGEST" ] \
+              && [ "$source_sha" = "$SOURCE_SHA" ]; then exit 0; fi
+            sleep 5
+          done
+          echo 'Auth API did not return the exact approved Release Candidate artifacts' >&2
+          exit 1
+
+      - name: Live promotion summary
+        run: |
+          {
+            echo '## AWS-accepted artifacts promoted to live'
+            echo 'AWS acceptance record: retained as workflow artifact'
+            echo "Release version: $RELEASE_VERSION"
+            echo "Candidate version: $CANDIDATE_VERSION"
+            echo "Source SHA: $SOURCE_SHA"
+            echo "API image digest: $API_DIGEST"
+            echo "Web image digest: $WEB_DIGEST"
+            echo 'No image was rebuilt during promotion.'
+          } >> "$GITHUB_STEP_SUMMARY"

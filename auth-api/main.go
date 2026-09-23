@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -44,6 +45,7 @@ const (
 )
 
 var approvedVersionPath = "/data/approved_version.txt"
+var approvedReleasePath = "/approval/approved_release.json"
 
 var approvedVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[._-][0-9A-Za-z.-]+)?$`)
 
@@ -51,6 +53,7 @@ type Config struct {
 	Port                  string
 	DBPath                string
 	ApprovedVersionPath   string
+	ApprovedReleasePath   string
 	RegistryURL           string
 	ActivationURL         string
 	PrivateKeyPath        string
@@ -96,6 +99,16 @@ type AuthorizeResponse struct {
 	ApprovedVersion string `json:"approved_version"`
 	RegistryURL     string `json:"registry_url"`
 	ActivationURL   string `json:"activation_url"`
+	SourceSHA       string `json:"source_sha,omitempty"`
+	APIImageDigest  string `json:"api_image_digest,omitempty"`
+	WebImageDigest  string `json:"web_image_digest,omitempty"`
+}
+
+type ApprovedRelease struct {
+	Version        string `json:"version"`
+	SourceSHA      string `json:"source_sha"`
+	APIImageDigest string `json:"api_image_digest"`
+	WebImageDigest string `json:"web_image_digest"`
 }
 
 type ActivationAssertionRequest struct {
@@ -260,6 +273,7 @@ func loadConfig() Config {
 		Port:                  getEnv("PORT", "8443"),
 		DBPath:                getEnv("DB_PATH", "/data/auth-tokens.db"),
 		ApprovedVersionPath:   getEnv("APPROVED_VERSION_PATH", "/data/approved_version.txt"),
+		ApprovedReleasePath:   getEnv("APPROVED_RELEASE_PATH", "/approval/approved_release.json"),
 		RegistryURL:           getEnv("REGISTRY_URL", "registry.matched.laysports.co.uk"),
 		ActivationURL:         getEnv("ACTIVATION_SERVICE_URL", ""),
 		PrivateKeyPath:        getEnv("PRIVATE_KEY_PATH", "/data/private.pem"),
@@ -466,6 +480,22 @@ func loadApprovedVersion() string {
 		return ""
 	}
 	return v
+}
+
+func loadApprovedRelease(version string) *ApprovedRelease {
+	data, err := os.ReadFile(approvedReleasePath)
+	if err != nil {
+		return nil
+	}
+	var release ApprovedRelease
+	if json.Unmarshal(data, &release) != nil || release.Version != version ||
+		!approvedVersionPattern.MatchString(release.Version) ||
+		!regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(release.SourceSHA) ||
+		!regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(release.APIImageDigest) ||
+		!regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(release.WebImageDigest) {
+		return nil
+	}
+	return &release
 }
 
 func watchApprovedVersion() {
@@ -754,9 +784,6 @@ func authorizeHandler(c *gin.Context) {
 		return
 	}
 
-	// A successful authorization response must always identify the central
-	// activation service. Do not issue a usable-looking response that would
-	// force the installer to guess a hostname or weaken its activation checks.
 	if strings.TrimSpace(cfg.ActivationURL) == "" {
 		logError(c, http.StatusServiceUnavailable, tokenPrefix, "activation service URL is not configured")
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "activation service unavailable"})
@@ -779,6 +806,11 @@ func authorizeHandler(c *gin.Context) {
 		ApprovedVersion: approved,
 		RegistryURL:     cfg.RegistryURL,
 		ActivationURL:   cfg.ActivationURL,
+	}
+	if release := loadApprovedRelease(approved); release != nil {
+		resp.SourceSHA = release.SourceSHA
+		resp.APIImageDigest = release.APIImageDigest
+		resp.WebImageDigest = release.WebImageDigest
 	}
 
 	logRequest(c, http.StatusOK, tokenPrefix, "authorization successful")
@@ -1072,6 +1104,7 @@ func setupRouter() *gin.Engine {
 func main() {
 	cfg = loadConfig()
 	approvedVersionPath = cfg.ApprovedVersionPath
+	approvedReleasePath = cfg.ApprovedReleasePath
 	rateLimiter = NewRateLimiter(cfg.RateLimitPerMin, time.Minute)
 
 	approvedVersion = loadApprovedVersion()

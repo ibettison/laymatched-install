@@ -18,6 +18,7 @@ log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+source "$SCRIPT_DIR/release_identity.sh"
 
 ACTIVATION_SERVICE_URL="${ACTIVATION_SERVICE_URL:-}"
 
@@ -285,6 +286,16 @@ from pathlib import Path
 source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
 lines = source.read_text().splitlines(keepends=True)
+for index, line in enumerate(lines):
+    line = line.replace(
+        "image: ${REGISTRY_URL}/laymatched-api:${APP_VERSION}",
+        "image: ${API_IMAGE_REF:-${REGISTRY_URL}/laymatched-api:${APP_VERSION}}",
+    )
+    line = line.replace(
+        "image: ${REGISTRY_URL}/laymatched-web:${APP_VERSION}",
+        "image: ${WEB_IMAGE_REF:-${REGISTRY_URL}/laymatched-web:${APP_VERSION}}",
+    )
+    lines[index] = line
 
 service_start = next((index for index, line in enumerate(lines) if line == "  api:\n"), None)
 if service_start is None:
@@ -473,6 +484,9 @@ auth_response_signal_exit() {
 
 call_auth_api() {
     local installer_token="$1"
+    API_IMAGE_REF=""
+    WEB_IMAGE_REF=""
+    RELEASE_SOURCE_SHA=""
     log_info "Contacting LayMatched authorization service..."
 
     # Build JSON safely using python3 to avoid injection issues
@@ -523,6 +537,9 @@ print(json.dumps({"installer_token": sys.argv[1]}))
     REGISTRY_TOKEN=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_token', ''))")
     APPROVED_VERSION=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('approved_version', ''))")
     REGISTRY_URL=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_url', ''))")
+    APPROVED_SOURCE_SHA=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('source_sha', ''))")
+    API_IMAGE_DIGEST=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('api_image_digest', ''))")
+    WEB_IMAGE_DIGEST=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('web_image_digest', ''))")
 
     if [ -z "${REGISTRY_TOKEN}" ] || [ -z "${APPROVED_VERSION}" ] || [ -z "${REGISTRY_URL}" ]; then
         log_error "Invalid response from authorization service. Token may be invalid or expired."
@@ -537,6 +554,8 @@ print(json.dumps({"installer_token": sys.argv[1]}))
     fi
 
     log_info "Authorization successful. Approved version: ${APPROVED_VERSION}"
+    set_approved_release_image_refs || \
+        log_error "Authorization returned an incomplete or invalid approved release identity."
 }
 
 # -- Verify we're in the right directory --------------------------------
@@ -624,6 +643,7 @@ else
     CANDIDATE_VERSION="${APPROVED_VERSION}"
     log_info "Using approved version from authorization service: ${CANDIDATE_VERSION}"
 fi
+APP_VERSION="$CANDIDATE_VERSION"
 
 # Candidate registry URL from Auth API
 CANDIDATE_REGISTRY_URL="${REGISTRY_URL}"
@@ -654,14 +674,9 @@ CANDIDATE_ENV_FILE="/opt/laymatched/.env.candidate"
 CANDIDATE_COMPOSE_FILE="/opt/laymatched/docker-compose.candidate.yml"
 PRESERVE_RECOVERY_ARTIFACTS=1
 RECOVERY_REASON="candidate_deployment_failed"
-# Update candidate APP_VERSION
-sed -i "s/^APP_VERSION=.*/APP_VERSION=${CANDIDATE_VERSION}/" .env.candidate
-# Handle REGISTRY_URL: replace if exists, append if missing (legacy .env migration)
-if grep -q '^REGISTRY_URL=' .env.candidate; then
-    sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" .env.candidate
-else
-    echo "REGISTRY_URL=${CANDIDATE_REGISTRY_URL}" >> .env.candidate
-fi
+write_release_identity_env "$CANDIDATE_ENV_FILE" "$CANDIDATE_VERSION" "$CANDIDATE_REGISTRY_URL" \
+    "$API_IMAGE_REF" "$WEB_IMAGE_REF" "$RELEASE_SOURCE_SHA" || \
+    log_error "Could not write the complete approved release identity to the candidate environment."
 
 # Keep the persistent Compose file unchanged until the candidate is healthy.
 # Legacy files may lack the MFA API mapping, so prepare an ephemeral candidate
@@ -674,9 +689,9 @@ log_info "Phase 4: Pulling candidate LayMatched release (${CANDIDATE_VERSION})..
 
 # Use the candidate environment and candidate Compose file for interpolation
 # and the first candidate restart. The persistent Compose file is unchanged.
-if ! docker compose --env-file .env.candidate -f "$CANDIDATE_COMPOSE_FILE" pull; then
-    handle_candidate_failure "candidate_pull_failed"
-    log_error "Candidate image pull failed. Candidate artifacts were retained; automatic rollback was not attempted. Review $RECOVERY_STATE_FILE before recovery."
+if ! prepare_release_compose "$CANDIDATE_ENV_FILE" "$CANDIDATE_COMPOSE_FILE"; then
+    handle_candidate_failure "candidate_pull_or_identity_failed"
+    log_error "Candidate pull, identity verification, or deployment failed. Review $RECOVERY_STATE_FILE before recovery."
 fi
 
 # -- Phase 5: Restart services with candidate version ----------------------
@@ -684,7 +699,7 @@ fi
 log_info "Phase 5: Restarting services with candidate release..."
 
 CANDIDATE_RESTART_ATTEMPTED=1
-if ! docker compose --env-file .env.candidate -f "$CANDIDATE_COMPOSE_FILE" up -d; then
+if ! start_release_compose "$CANDIDATE_ENV_FILE" "$CANDIDATE_COMPOSE_FILE"; then
     handle_candidate_failure "candidate_restart_failed"
     log_error "Candidate restart failed. Candidate artifacts were retained; automatic rollback was not attempted. Review $RECOVERY_STATE_FILE before recovery."
 fi
@@ -725,22 +740,9 @@ log_info "Phase 8: Candidate healthy. Persisting new version and regenerating co
 cd /opt/laymatched
 
 # Persist candidate values to persistent .env
-if [ "$CANDIDATE_VERSION" != "$CURRENT_APP_VERSION" ]; then
-    log_info "Persisting new version $CANDIDATE_VERSION to /opt/laymatched/.env..."
-    sed -i "s/^APP_VERSION=.*/APP_VERSION=${CANDIDATE_VERSION}/" .env
-    log_info "Version updated in configuration."
-fi
-
-CURRENT_REGISTRY_URL=$(grep '^REGISTRY_URL=' /opt/laymatched/.env | cut -d'=' -f2-)
-# Persist registry URL if it changed (or is missing - legacy migration)
-if [ -z "${CURRENT_REGISTRY_URL:-}" ] || [ "$CANDIDATE_REGISTRY_URL" != "$CURRENT_REGISTRY_URL" ]; then
-    log_info "Persisting registry URL ${CANDIDATE_REGISTRY_URL} to /opt/laymatched/.env..."
-    if grep -q '^REGISTRY_URL=' .env; then
-        sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" .env
-    else
-        echo "REGISTRY_URL=${CANDIDATE_REGISTRY_URL}" >> .env
-    fi
-fi
+write_release_identity_env /opt/laymatched/.env "$CANDIDATE_VERSION" "$CANDIDATE_REGISTRY_URL" \
+    "$API_IMAGE_REF" "$WEB_IMAGE_REF" "$RELEASE_SOURCE_SHA" || \
+    log_error "Could not atomically persist the deployed approved release identity."
 
 # Regenerate docker-compose.yml with updated configuration (uses persistent .env)
 cat > /opt/laymatched/docker-compose.yml <<'COMPOSE_EOF'
@@ -767,7 +769,7 @@ services:
       - laymatched_net
 
   api:
-    image: ${REGISTRY_URL}/laymatched-api:${APP_VERSION}
+    image: ${API_IMAGE_REF:-${REGISTRY_URL}/laymatched-api:${APP_VERSION}}
     container_name: laymatched-api
     restart: unless-stopped
     depends_on:
@@ -794,7 +796,7 @@ services:
       - laymatched_net
 
   web:
-    image: ${REGISTRY_URL}/laymatched-web:${APP_VERSION}
+    image: ${WEB_IMAGE_REF:-${REGISTRY_URL}/laymatched-web:${APP_VERSION}}
     container_name: laymatched-web
     restart: unless-stopped
     depends_on:

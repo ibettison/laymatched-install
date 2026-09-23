@@ -13,12 +13,12 @@ def test_fresh_install_uses_authorization_approved_images() -> None:
     auth = installer.index('call_auth_api "$INSTALLER_TOKEN"')
     approved_assignment = installer.index('APP_VERSION="${APPROVED_VERSION}"', auth)
     environment_write = installer.index("APP_VERSION=${APP_VERSION}", approved_assignment)
-    fresh_pull = installer.index("docker compose pull", environment_write)
-    fresh_start = installer.index("docker compose up -d", fresh_pull)
+    fresh_deploy = installer.index("deploy_release_compose .env docker-compose.yml", environment_write)
 
-    assert auth < approved_assignment < environment_write < fresh_pull < fresh_start
-    assert "image: ${REGISTRY_URL}/laymatched-api:${APP_VERSION}" in installer
-    assert "image: ${REGISTRY_URL}/laymatched-web:${APP_VERSION}" in installer
+    assert auth < approved_assignment < environment_write < fresh_deploy
+    assert 'image: ${API_IMAGE_REF:-${REGISTRY_URL}/laymatched-api:${APP_VERSION}}' in installer
+    assert 'image: ${WEB_IMAGE_REF:-${REGISTRY_URL}/laymatched-web:${APP_VERSION}}' in installer
+    assert "verify_release_image_identity" in (ROOT / "tools/release_identity.sh").read_text()
 
 
 def test_resume_replaces_stale_version_with_approved_images_before_start() -> None:
@@ -26,11 +26,12 @@ def test_resume_replaces_stale_version_with_approved_images_before_start() -> No
     resume = installer.index('log_info "Existing installation detected - re-authorizing for image pull."')
     auth = installer.index('call_auth_api "$INSTALLER_TOKEN"', resume)
     approved_assignment = installer.index('APP_VERSION="${APPROVED_VERSION}"', auth)
-    candidate_update = installer.index('sed -i "s/^APP_VERSION=.*/APP_VERSION=${APP_VERSION}/" .env.candidate', approved_assignment)
-    pull = installer.index("docker compose --env-file .env.candidate pull", candidate_update)
-    recreate = installer.index("docker compose --env-file .env.candidate up -d", pull)
+    candidate_update = installer.index('write_release_identity_env "$CANDIDATE_ENV_FILE"', approved_assignment)
+    deploy = installer.index('deploy_release_compose "$CANDIDATE_ENV_FILE" "$CANDIDATE_COMPOSE_FILE"', candidate_update)
+    persist = installer.index('write_release_identity_env /opt/laymatched/.env', deploy)
 
-    assert resume < auth < approved_assignment < candidate_update < pull < recreate
+    assert resume < auth < approved_assignment < candidate_update < deploy < persist
+    assert 'source "$SCRIPT_DIR/tools/release_identity.sh"' in installer
     assert "APP_VERSION=v0.1.1" not in installer
 
 

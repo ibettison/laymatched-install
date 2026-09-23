@@ -13,10 +13,19 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/tools/release_identity.sh"
 ACTIVATION_STATE_DIR="/var/lib/laymatched/activation"
 LOCAL_ACTIVATION_HELPER="/opt/laymatched/local_activation.py"
 INSTALLATION_ID_FILE="/etc/laymatched/installation-id"
 ACTIVATION_SERVICE_URL="${ACTIVATION_SERVICE_URL:-}"
+RELEASE_CANDIDATE_MANIFEST=""
+if [ "$#" -gt 0 ]; then
+    if [ "$#" -ne 2 ] || [ "$1" != "--release-candidate" ] || [ -z "$2" ]; then
+        echo "Usage: $0 [--release-candidate manifest.json]" >&2
+        exit 2
+    fi
+    RELEASE_CANDIDATE_MANIFEST="$2"
+fi
 
 log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
@@ -350,6 +359,17 @@ validate_activation_url() {
     ! printf '%s' "$1" | grep -q '[[:space:]]'
 }
 
+read_release_candidate_manifest() {
+    local manifest_path="$1" expected_registry="$2" values
+    values=$(python3 "$SCRIPT_DIR/tools/release_candidate_manifest.py" \
+        "$manifest_path" "$expected_registry") || return 1
+    IFS=$'\t' read -r RELEASE_CANDIDATE_VERSION RELEASE_CANDIDATE_SOURCE_SHA \
+        RELEASE_CANDIDATE_API_DIGEST RELEASE_CANDIDATE_WEB_DIGEST <<< "$values"
+    API_IMAGE_REF="${REGISTRY_URL}/laymatched-api-staging@${RELEASE_CANDIDATE_API_DIGEST}"
+    WEB_IMAGE_REF="${REGISTRY_URL}/laymatched-web-staging@${RELEASE_CANDIDATE_WEB_DIGEST}"
+    RELEASE_SOURCE_SHA="$RELEASE_CANDIDATE_SOURCE_SHA"
+}
+
 AUTH_RESPONSE_DIR=""
 
 cleanup_auth_response() {
@@ -372,6 +392,9 @@ auth_response_signal_exit() {
 
 call_auth_api() {
     local installer_token="$1"
+    API_IMAGE_REF=""
+    WEB_IMAGE_REF=""
+    RELEASE_SOURCE_SHA=""
     log_info "Contacting LayMatched authorization service..."
 
     # Build JSON safely using python3 to avoid injection issues
@@ -422,6 +445,9 @@ print(json.dumps({"installer_token": sys.argv[1]}))
     REGISTRY_TOKEN=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_token', ''))")
     APPROVED_VERSION=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('approved_version', ''))")
     REGISTRY_URL=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_url', ''))")
+    APPROVED_SOURCE_SHA=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('source_sha', ''))")
+    API_IMAGE_DIGEST=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('api_image_digest', ''))")
+    WEB_IMAGE_DIGEST=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('web_image_digest', ''))")
     AUTH_ACTIVATION_SERVICE_URL=$(echo "${response}" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('activation_url') or data.get('activation_service_url') or '')")
     if [ -n "${AUTH_ACTIVATION_SERVICE_URL}" ]; then
         if ! validate_activation_url "${AUTH_ACTIVATION_SERVICE_URL}"; then
@@ -443,6 +469,9 @@ print(json.dumps({"installer_token": sys.argv[1]}))
     fi
 
     log_info "Authorization successful. Approved version: ${APPROVED_VERSION}"
+
+    set_approved_release_image_refs || \
+        log_error "Authorization returned an incomplete or invalid approved release identity."
 }
 
 # -- Generate PBKDF2 password hash matching backend/scripts/create_credentials.py ---
@@ -632,6 +661,10 @@ if [ -f /opt/laymatched/.env ]; then
     CUSTOMER_HOSTNAME=$(grep '^CUSTOMER_HOSTNAME=' /opt/laymatched/.env | cut -d'=' -f2- || true)
 fi
 
+if [ -n "$RELEASE_CANDIDATE_MANIFEST" ] && [ "$CONFIG_ALREADY_PROVIDED" = "true" ]; then
+    log_error "Release candidate installation requires a clean customer installation."
+fi
+
 if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     log_info "Phase 4: Collecting customer configuration..."
 
@@ -648,6 +681,13 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     # Call Auth API to get registry credentials and approved version
     call_auth_api "$INSTALLER_TOKEN"
     APP_VERSION="${APPROVED_VERSION}"
+    if [ -n "$RELEASE_CANDIDATE_MANIFEST" ]; then
+        if ! read_release_candidate_manifest "$RELEASE_CANDIDATE_MANIFEST" "$REGISTRY_URL"; then
+            log_error "Release candidate manifest failed validation."
+        fi
+        APP_VERSION="$RELEASE_CANDIDATE_VERSION"
+        log_info "Installing release candidate ${APP_VERSION} from source ${RELEASE_SOURCE_SHA}."
+    fi
     if [ -z "${AUTH_ACTIVATION_SERVICE_URL:-}" ]; then
         log_error "Authorization service did not provide the customer activation service URL. Installation cannot provision a private hostname safely."
     fi
@@ -705,6 +745,9 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
     cat > /opt/laymatched/.env <<EOF
 APP_VERSION=${APP_VERSION}
 REGISTRY_URL=${REGISTRY_URL}
+API_IMAGE_REF=${API_IMAGE_REF:-}
+WEB_IMAGE_REF=${WEB_IMAGE_REF:-}
+RELEASE_SOURCE_SHA=${RELEASE_SOURCE_SHA:-}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 AUTH_USERNAME=${AUTH_USERNAME}
 AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH}
@@ -720,6 +763,10 @@ EOF
         log_error "MFA encryption configuration could not be created."
     chmod 600 /opt/laymatched/.env
     chown root:root /opt/laymatched/.env
+
+    if [ -n "$RELEASE_CANDIDATE_MANIFEST" ]; then
+        install -o root -g root -m 0644 "$RELEASE_CANDIDATE_MANIFEST" /opt/laymatched/release-candidate.json
+    fi
 
     log_info "Configuration stored in /opt/laymatched/.env (permissions 600). Secrets generated independently of installer token."
 else
@@ -745,13 +792,11 @@ else
     # Create candidate .env with new version/registry for Compose interpolation
     cd /opt/laymatched
     cp .env .env.candidate
-    sed -i "s/^APP_VERSION=.*/APP_VERSION=${APP_VERSION}/" .env.candidate
-    # Handle REGISTRY_URL: replace if exists, append if missing (legacy .env migration)
-    if grep -q '^REGISTRY_URL=' .env.candidate; then
-        sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" .env.candidate
-    else
-        echo "REGISTRY_URL=${CANDIDATE_REGISTRY_URL}" >> .env.candidate
-    fi
+    CANDIDATE_ENV_FILE="/opt/laymatched/.env.candidate"
+    CANDIDATE_COMPOSE_FILE="/opt/laymatched/docker-compose.yml"
+    write_release_identity_env "$CANDIDATE_ENV_FILE" "$APP_VERSION" "$CANDIDATE_REGISTRY_URL" \
+        "$API_IMAGE_REF" "$WEB_IMAGE_REF" "$RELEASE_SOURCE_SHA" || \
+        log_error "Could not write the complete approved release identity to the candidate environment."
     cd - > /dev/null
 fi
 
@@ -759,12 +804,27 @@ fi
 
 log_info "Phase 5: Authenticating to LayMatched Container Registry..."
 
-# Use the validated Installer Token in an ephemeral Docker credential store.
-# The registry exchanges it for a short-lived JWT during the image pull.
+# Use ephemeral credentials; candidate pulls use the owner-read token scoped to
+# the staging repositories, while normal installs use the customer token.
 install_ephemeral_docker_auth_traps
 setup_ephemeral_docker_auth
-if ! echo "${REGISTRY_TOKEN}" | docker login "${REGISTRY_URL}" -u laymatched-installer --password-stdin > /dev/null 2>&1; then
-    log_error "Failed to authenticate to LayMatched Container Registry. Please verify your Installer Token is valid."
+if [ -n "$RELEASE_CANDIDATE_MANIFEST" ]; then
+    set +o history
+    read -r -p "Enter the owner read-only Release Candidate pull token: " -s RELEASE_CANDIDATE_PULL_TOKEN
+    echo
+    set -o history
+    if [ -z "$RELEASE_CANDIDATE_PULL_TOKEN" ]; then
+        log_error "Owner Release Candidate pull token is required."
+    fi
+    if ! printf '%s' "$RELEASE_CANDIDATE_PULL_TOKEN" | docker login "${REGISTRY_URL}" \
+        -u laymatched-owner --password-stdin > /dev/null 2>&1; then
+        log_error "Failed to authenticate for owner-only Release Candidate image pulls."
+    fi
+    unset RELEASE_CANDIDATE_PULL_TOKEN
+else
+    if ! echo "${REGISTRY_TOKEN}" | docker login "${REGISTRY_URL}" -u laymatched-installer --password-stdin > /dev/null 2>&1; then
+        log_error "Failed to authenticate to LayMatched Container Registry. Please verify your Installer Token is valid."
+    fi
 fi
 
 log_info "Authentication to LayMatched Registry complete."
@@ -797,7 +857,7 @@ services:
       - laymatched_net
 
   api:
-    image: ${REGISTRY_URL}/laymatched-api:${APP_VERSION}
+    image: ${API_IMAGE_REF:-${REGISTRY_URL}/laymatched-api:${APP_VERSION}}
     container_name: laymatched-api
     restart: unless-stopped
     depends_on:
@@ -826,7 +886,7 @@ services:
       - laymatched_net
 
   web:
-    image: ${REGISTRY_URL}/laymatched-web:${APP_VERSION}
+    image: ${WEB_IMAGE_REF:-${REGISTRY_URL}/laymatched-web:${APP_VERSION}}
     container_name: laymatched-web
     restart: unless-stopped
     depends_on:
@@ -939,6 +999,7 @@ fi
 # Copy update.sh to installation directory for future updates
 cp "${SCRIPT_DIR}/update.sh" /opt/laymatched/update.sh
 chmod +x /opt/laymatched/update.sh
+install -o root -g root -m 0644 "${SCRIPT_DIR}/tools/release_identity.sh" /opt/laymatched/release_identity.sh
 log_info "update.sh copied to /opt/laymatched/"
 
 # -- Phase 7: Pull and start services -------------------------------------
@@ -952,12 +1013,16 @@ cd /opt/laymatched
 # For fresh install: use persistent .env (already has correct values)
 if [ "${CONFIG_ALREADY_PROVIDED}" = "true" ]; then
     log_info "Rerun detected - deploying candidate release..."
-    docker compose --env-file .env.candidate pull
-    docker compose --env-file .env.candidate up -d
+    deploy_release_compose "$CANDIDATE_ENV_FILE" "$CANDIDATE_COMPOSE_FILE" || \
+        log_error "Approved release pull, identity verification, or deployment failed."
 else
-    log_info "Fresh install - deploying approved release..."
-    docker compose pull
-    docker compose up -d
+    if [ -n "$RELEASE_CANDIDATE_MANIFEST" ]; then
+        log_info "Fresh install - deploying immutable Release Candidate artifacts..."
+    else
+        log_info "Fresh install - deploying approved release..."
+    fi
+    deploy_release_compose .env docker-compose.yml || \
+        log_error "Approved release pull, identity verification, or deployment failed."
 fi
 cd - > /dev/null
 
@@ -1097,23 +1162,9 @@ install_recognition_scheduler
 if [ "${CONFIG_ALREADY_PROVIDED}" = "true" ]; then
     log_info "Rerun successful - persisting candidate configuration..."
 
-    # Persist version if it changed
-    if [ -n "${ORIGINAL_APP_VERSION:-}" ] && [ "$APP_VERSION" != "$ORIGINAL_APP_VERSION" ]; then
-        log_info "Persisting updated version $APP_VERSION to /opt/laymatched/.env..."
-        sed -i "s/^APP_VERSION=.*/APP_VERSION=${APP_VERSION}/" /opt/laymatched/.env
-        log_info "Version updated in configuration."
-    fi
-
-    # Persist registry URL if it changed (or is missing - legacy migration)
-    if [ -z "${ORIGINAL_REGISTRY_URL:-}" ] || [ "${CANDIDATE_REGISTRY_URL}" != "${ORIGINAL_REGISTRY_URL}" ]; then
-        log_info "Persisting registry URL ${CANDIDATE_REGISTRY_URL} to /opt/laymatched/.env..."
-        if grep -q '^REGISTRY_URL=' /opt/laymatched/.env; then
-            sed -i "s|^REGISTRY_URL=.*|REGISTRY_URL=${CANDIDATE_REGISTRY_URL}|" /opt/laymatched/.env
-        else
-            echo "REGISTRY_URL=${CANDIDATE_REGISTRY_URL}" >> /opt/laymatched/.env
-        fi
-        log_info "Registry URL updated in configuration."
-    fi
+    write_release_identity_env /opt/laymatched/.env "$APP_VERSION" "$CANDIDATE_REGISTRY_URL" \
+        "$API_IMAGE_REF" "$WEB_IMAGE_REF" "$RELEASE_SOURCE_SHA" || \
+        log_error "Could not atomically persist the deployed approved release identity."
 
     # Regenerate docker-compose.yml with updated configuration (uses persistent .env)
     cd /opt/laymatched
@@ -1141,7 +1192,7 @@ services:
       - laymatched_net
 
   api:
-    image: ${REGISTRY_URL}/laymatched-api:${APP_VERSION}
+    image: ${API_IMAGE_REF:-${REGISTRY_URL}/laymatched-api:${APP_VERSION}}
     container_name: laymatched-api
     restart: unless-stopped
     depends_on:
@@ -1170,7 +1221,7 @@ services:
       - laymatched_net
 
   web:
-    image: ${REGISTRY_URL}/laymatched-web:${APP_VERSION}
+    image: ${WEB_IMAGE_REF:-${REGISTRY_URL}/laymatched-web:${APP_VERSION}}
     container_name: laymatched-web
     restart: unless-stopped
     depends_on:

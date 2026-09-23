@@ -2414,7 +2414,7 @@ not an A-08 MFA behavior change.
 - Owner session health: **200**.
 - API, web, and PostgreSQL containers: **healthy**.
 - The deployment result and recovery evidence were posted to PR #252 in
-  [comment #5677393931](https://github.com/ibettisson/layMatchedBetting/pull/252#issuecomment-5677393931).
+  [comment #5677393931](https://github.com/ibettison/layMatchedBetting/pull/252#issuecomment-5677393931).
 
 ### A-08 / deployment status
 
@@ -2661,3 +2661,216 @@ review; these observations are operator-provided evidence.
   live activation state were accessed. Local checks do not establish AWS
   acceptance; the operator must rerun safely after confirming the approved
   application tag/digests and then verify `/` before completing MFA.
+
+### AWS-first customer Release Candidate qualification (2026-09-23)
+
+The owner clarified that the authoritative process is:
+
+`DEVELOPMENT → AUTOMATED QUALIFICATION → IMMUTABLE RELEASE CANDIDATE → CLEAN
+AWS CUSTOMER INSTALLATION → OWNER REVIEW / ACCEPTANCE ON AWS → PROMOTE THE
+EXACT APPROVED ARTIFACTS TO LIVE`.
+
+Production remains on its existing approved release until explicit owner
+acceptance of the clean AWS installation. On acceptance failure, diagnose and
+fix the defect, create a new immutable `rc.N`, and repeat AWS acceptance. Do
+not rebuild the accepted application after approval.
+
+The owner-confirmed production approval is still **v0.1.1**. Application
+release policy is now documented in the app's `RELEASE.md`: before 1.0, a
+customer-facing capability/contract increment advances MINOR; fixes without
+capability advance PATCH. The post-v0.1.1 history adds MFA, customer
+activation/DNS, and account onboarding, so the next final version is **v0.2.0**
+and the proposed first candidate is **v0.2.0-rc.1**.
+
+#### Qualified application source and root causes
+
+Application source SHA
+`c8efccf843f4eec7d1d6f0fd035b023ff9ea3c69` is on
+`codex/customer-release-qualification`; PR
+[layMatchedBetting #263](https://github.com/ibettison/layMatchedBetting/pull/263)
+is open and was reported mergeable with no review decision. It contains:
+
+- The Workspace lint defect fix and picker regression test.
+- Explicit terminal DNS outbox state (`failed`) and a non-null terminal
+  timestamp; retryable errors stay `pending` with backoff. Tests prove no
+  retry hint or reprocessing remains after terminal failure.
+- Owner leads API handlers converted to `async def`. Async owner authorization
+  and sync handlers had shared one SQLAlchemy session across the event loop and
+  AnyIO worker thread; that thread-boundary use caused ASGI to stall after the
+  response object was constructed. The bounded regression now passes.
+- Reset table classifications preserve newly introduced operational data;
+  startup worker tests isolate background pollers; a funnel test now awaits its
+  async summary.
+
+#### Qualification evidence
+
+- Frontend lint: **passed, 0 errors and 4 existing warnings**.
+- Frontend suites: **139 passed**; customer artifact suite: **2 passed**.
+- Standard frontend build and customer frontend build: **passed**.
+- Complete application backend suite: **passed at 100%**, including owner
+  leads and DNS; existing skips and the Alembic deprecation warning remain.
+- Auth API Go `go test ./...`: **passed**.
+- Installer unittest suite: **50 passed**.
+- Candidate/promotion workflow contract tests: **10 passed**; `bash -n`, shell
+  parsing, and `git diff --check`: **passed**.
+
+#### Candidate and promotion workflow review
+
+Installer/auth/release changes are in open PR
+[laymatched-install #41](https://github.com/ibettison/laymatched-install/pull/41)
+on branch `codex/aws-accepted-release-flow`. It replaces the combined release
+workflow with separate candidate creation and post-acceptance promotion.
+Candidate creation checks out the exact application SHA, runs the full
+automated qualification, builds API and web once, publishes owner-only
+staging images, pulls them back to verify source labels, and creates a
+manifest with candidate/final version, source SHA and both image digests.
+The customer installer consumes that manifest only on a clean installation,
+validates its full identity tuple, and pulls each candidate by digest.
+
+Promotion requires the AWS acceptance JSON record to bind candidate version,
+source SHA and both image digests and mark clean installation, artifact
+identity, DNS, HTTPS, activation, login, MFA, current UI/functionality, public
+routes, normal startup and owner acceptance true. It uses a protected
+`production` GitHub Environment (which must require owner review), copies the
+exact accepted manifests without rebuilding, verifies resulting digests and
+Installer Token pulls, then atomically replaces `approved_release.json` and
+`approved_version.txt` (version written last), and verifies the Auth API read
+back. The exact same digests flow from candidate manifest through AWS
+acceptance and live approval.
+
+Rebasing onto current main exposed an Auth API regression: the release identity
+response change had dropped the existing fail-closed check for an empty
+activation-service URL. The guard is restored before approved-version
+authorization, and the existing missing-URL regression is included in the
+passing full Go suite.
+
+The installer reader has executable tests for candidate/final version
+consistency, source SHA, registry and image-reference/digest matching. The
+workflow has serialization by candidate/release version and refuses existing
+tags; production promotion also preserves OCI manifests/digests with Skopeo.
+
+#### Current boundary
+
+- The app source is fully qualified locally at the exact SHA above; no images
+  have been built or published. No actual immutable candidate manifest exists
+  yet, so an owner cannot review the running candidate on AWS yet.
+- PR #41 must be merged before its candidate workflow can be dispatched from
+  the default branch; PR #263 also needs normal review. Configure the GitHub
+  `production` Environment with an owner reviewer before enabling promotion.
+- Production approval remains **v0.1.1**. Neither approval metadata nor
+  production images were changed.
+- AWS was **not accessed or modified**. No candidate/promotion workflow was
+  dispatched.
+
+NEXT ACTION: review/merge PRs #263 and #41, confirm protected owner review on
+the `production` Environment, then dispatch candidate creation for source
+`c8efccf843f4eec7d1d6f0fd035b023ff9ea3c69` as `v0.2.0-rc.1`. Download and
+review its immutable manifest, use the customer installer with that manifest
+to install those exact digests on clean AWS, and complete the documented
+acceptance checklist. Only after explicit owner acceptance should PR #41's
+promotion workflow be dispatched with those same digests and the AWS evidence.
+
+#### Repository identity review (2026-09-23)
+
+Independent review confirmed an owner spelling defect in PR #41's candidate
+workflow: the application checkout and both OCI source labels named the
+application repository with an extra `s` in its owner name; the authoritative
+identity is `ibettison/layMatchedBetting`. The existing workflow contract test
+repeated the incorrect expected checkout repository. A historical PR #252 evidence
+link in this PAD also used the misspelled owner. The canonical and deployment
+workflow copies now share one `APPLICATION_REPOSITORY` value; checkout, both
+image source labels, and candidate manifest metadata use that identity. The
+test asserts the exact authoritative owner/repository, its use by checkout,
+labels and manifest, and rejects the typo in the candidate/promotion
+workflows. The historical evidence link now points to the correct repository.
+Search across both local application and installer repositories found no
+other operational occurrences. Release workflow contracts: **11 passed**;
+installer suite: **61 passed**; shell syntax and `git diff --check`: **passed**.
+These changes are in PR #41 and remain unmerged; production approval remains
+**v0.1.1** and no candidate or AWS action was performed.
+
+#### Direct reset and approved identity reauthorization review (2026-09-23)
+
+PR #263's reset review finding reproduced in a fresh Python process that
+imports `app.reset_personal_state` without application startup or test
+`conftest.py`: the reset classifier unconditionally required three
+central-only tables (`campaign_funnel_events`,
+`interest_notification_outbox`, and `interest_request_idempotency`) even when
+those models were absent from `Base.metadata`. They are now optional known
+reference tables and are preserved/classified when present. A subprocess
+regression creates an isolated SQLite schema from customer models and runs the
+actual module `--dry-run` entry path without importing central models.
+
+PR #41's installer rerun review finding also reproduced from the existing
+configuration flow: reruns changed `APP_VERSION` and `REGISTRY_URL` in
+`.env.candidate`, while copying old pinned API/web refs and source SHA from
+`.env`; Compose could therefore start the old digests and later record the new
+version. A shared release-identity helper now clears old refs before reading
+authorization, accepts only a complete SHA/API digest/web digest tuple (or a
+fully empty legacy identity), atomically writes version, registry, refs and
+SHA together, pulls and checks both source labels before Compose starts, and
+persists the tuple only after the new services pass health/activation gates.
+The updater uses the same helper and checks. Existing RC staging digest refs
+remain accepted; RC installs still require a clean customer installation.
+
+The rerun regression starts from v0.1.1 with old API/web digests and SHA,
+applies a v0.2.0 approval identity, checks the candidate environment and fake
+Compose pull/up use the new exact digests, verifies label SHA, persists all
+five identity fields, then simulates a subsequent updater resume and verifies
+the same identity is used again. Partial metadata is also rejected and cannot
+leave old refs populated.
+
+Validation after these changes: complete application backend suite **491
+passed, 4 skipped** (one existing Alembic deprecation warning); direct reset
+regression included. Installer pytest suites **108 passed, 24 subtests**;
+installer unittest suite **65 passed**; candidate/promotion workflow contracts
+**11 passed**; Bash syntax and `git diff --check` passed. Production approval
+remains **v0.1.1**; no AWS access, merge, release dispatch, or approval change
+occurred.
+
+#### Final v0.2.0 qualification closeout (2026-09-23)
+
+The owner-leads handlers retain the path-scoped `asyncio.to_thread` execution
+of owner authorization, SQLAlchemy work, and worker-session cleanup. The
+standalone probe against the application ASGI stack observed the delayed
+`marketing_leads` query start, `/health` return HTTP 200 while that query was
+held, explicit delay release, query completion, worker-session close, and the
+owner-leads response return HTTP 200 with the expected empty page. The
+unauthenticated real application path returned HTTP 401; its worker SQLAlchemy
+session was created and closed on the same worker thread, no SQLAlchemy object
+crossed the thread boundary, and that path did not enter the delayed lead
+query. The pytest owner-leads unauthenticated test reached **PASSED** and
+fixture/client/database/engine cleanup completed, but pytest/AnyIO hung in
+`asyncio.Runner.close` teardown. This is deferred as a **POST-RELEASE
+TEST-INFRASTRUCTURE ISSUE**; it is not treated as a demonstrated production
+defect. The standalone authenticated delayed-query probe is the release
+responsiveness evidence.
+
+The original PAD Welcome/MFA onboarding experience is retained at the customer
+VPS hostname root: `https://<customer>.matched.laysports.co.uk/`. Customer `/`
+serves the LayMatched Welcome/Login/MFA onboarding and application flow;
+customer `/app`, `/app/`, and `/app/...` return 404. The customer artifact does
+not include or serve the legacy/public marketing website. The separate owner
+website build keeps its existing `/app/` routing and public-site assets; owner
+and customer deployment profiles remain distinct.
+
+Qualification results for this pass: standard frontend **139 passed**;
+customer frontend artifact **3 passed**; customer artifact/root-routing
+contract **7 passed**; frontend lint **0 errors, 4 existing warnings**;
+customer build and owner build **passed**. The direct reset-module regression
+passed (**3 tests**). Installer pytest suites **83 passed**; installer
+unittest suite **65 passed**; release workflow contracts **11 passed**; the
+approved-release identity rerun regression **1 passed**; relevant Bash syntax
+and installer `git diff --check` **passed**. The complete backend suite did
+qualify earlier with **491 passed, 4 skipped**. A later attempted rerun,
+deselecting only `backend/tests/test_owner_leads_api.py::test_owner_auth_is_required_for_every_lead_operation`, was incomplete:
+pytest reported an unidentified failure at approximately 61%, then stalled
+without producing the failure report and was stopped. This run is not claimed
+as passing. Application `git diff --check` passed after cleanup.
+
+The reset direct-module and approved-release identity/rerun review findings
+remain fixed and their existing regressions pass. The two old GitHub review
+threads remain open but are satisfied by these fixes and tests; they are not
+new release scope. Production approval remains **v0.1.1**. No merge, release
+workflow dispatch, candidate creation, AWS access, or production change was
+performed.

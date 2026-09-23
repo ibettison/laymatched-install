@@ -28,6 +28,7 @@ func setupTestDB(t *testing.T) (*sql.DB, func()) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 	approvedVersionPath = filepath.Join(tmpDir, "approved_version.txt")
+	approvedReleasePath = filepath.Join(tmpDir, "approved_release.json")
 	if err := os.WriteFile(approvedVersionPath, []byte("v0.1.0"), 0644); err != nil {
 		t.Fatalf("Approved version setup failed: %v", err)
 	}
@@ -218,6 +219,64 @@ func TestAuthorizeValidToken(t *testing.T) {
 	// registry_token should be the installer token itself (for use with /token endpoint)
 	if resp.RegistryToken != token {
 		t.Errorf("Expected registry_token to be installer token, got %s", resp.RegistryToken)
+	}
+}
+
+func TestAuthorizeReturnsMatchingApprovedArtifactDigests(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testDB, cleanup := setupTestDB(t)
+	defer cleanup()
+	priv, pub := generateTestKeys(t)
+	privateKey, publicKey = priv, pub
+	cfg = Config{RegistryURL: "registry.matched.laysports.co.uk", ActivationURL: "https://matched.laysports.co.uk", RateLimitPerMin: 1000}
+	db = testDB
+	token := "lm_inst_digestmetadata1234567890"
+	insertTestToken(t, testDB, "customer-1", token, false, false)
+	release := ApprovedRelease{
+		Version: "v0.1.0", SourceSHA: strings.Repeat("a", 40),
+		APIImageDigest: "sha256:" + strings.Repeat("b", 64),
+		WebImageDigest: "sha256:" + strings.Repeat("c", 64),
+	}
+	body, err := json.Marshal(release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(approvedReleasePath, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	approvedVersion = loadApprovedVersion()
+
+	requestBody := `{"installer_token":"` + token + `"}`
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/installer/authorize", bytes.NewBufferString(requestBody))
+	req.Header.Set("Content-Type", "application/json")
+	setupRouter().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response AuthorizeResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.SourceSHA != release.SourceSHA || response.APIImageDigest != release.APIImageDigest || response.WebImageDigest != release.WebImageDigest {
+		t.Fatalf("Approved artifact identity was not returned: %#v", response)
+	}
+
+	release.Version = "v9.9.9"
+	body, _ = json.Marshal(release)
+	if err := os.WriteFile(approvedReleasePath, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	recorder = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/installer/authorize", bytes.NewBufferString(requestBody))
+	req.Header.Set("Content-Type", "application/json")
+	setupRouter().ServeHTTP(recorder, req)
+	response = AuthorizeResponse{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.SourceSHA != "" || response.APIImageDigest != "" || response.WebImageDigest != "" {
+		t.Fatalf("Mismatched manifest must not be returned with the approved version: %#v", response)
 	}
 }
 
@@ -792,6 +851,7 @@ func TestApprovedVersionChange(t *testing.T) {
 
 	cfg = Config{
 		RegistryURL:     "registry.matched.laysports.co.uk",
+		ActivationURL:   "https://matched.laysports.co.uk",
 		RateLimitPerMin: 1000,
 	}
 	router := setupRouter()
