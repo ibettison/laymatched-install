@@ -380,6 +380,11 @@ def reserve_hostname(args) -> int:
             operation="public-IP challenge verification", retry_deadline=deadline,
             extra_headers={"If-Match": f'"{current_status.get("version", session.get("version", 1))}"'},
         )
+    dns_wait_started = time.monotonic()
+    next_progress_at = dns_wait_started + 30
+    if reservation.get("status") != "dns_ready":
+        print("[INFO] Waiting for your LayMatched hostname/DNS to become ready...", file=sys.stderr, flush=True)
+        print("[INFO] This can take several minutes. The installer is still running — please do not close this window.", file=sys.stderr, flush=True)
     next_renewal = time.monotonic() + 600
     while reservation.get("status") != "dns_ready":
         dns_failed = reservation.get("status") == "dns_failed"
@@ -387,6 +392,11 @@ def reserve_hostname(args) -> int:
             raise RuntimeError("customer DNS failed terminally; inspect central activation status")
         if time.monotonic() >= deadline:
             raise RuntimeError("customer DNS did not become ready during the bounded retry window")
+        now = time.monotonic()
+        if now >= next_progress_at:
+            elapsed = int(now - dns_wait_started)
+            print(f"[WAIT] Still waiting for DNS... {elapsed} seconds elapsed", file=sys.stderr, flush=True)
+            next_progress_at = dns_wait_started + (elapsed // 30 + 1) * 30
         if time.monotonic() >= next_renewal:
             current_status = _status(args, directory, session, retry_deadline=deadline)
             renew_body = {"requested_extension_seconds": 900}
@@ -401,7 +411,7 @@ def reserve_hostname(args) -> int:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise RuntimeError("customer DNS did not become ready during the bounded retry window")
-        time.sleep(min(delay, remaining))
+        time.sleep(min(delay, remaining, max(0.1, next_progress_at - time.monotonic())))
         reservation = _reservation_from_status(_status(args, directory, session, retry_deadline=deadline))
         _write_hostname(directory, reservation)
     print(json.dumps(reservation, sort_keys=True))

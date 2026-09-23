@@ -162,6 +162,40 @@ class RecognitionClientTests(unittest.TestCase):
         self.assertEqual(saved["reservation_id"], status["reservation_id"])
         self.assertEqual(saved["hostname"], status["hostname"])
 
+    def test_hostname_reservation_wait_reports_initial_message_and_elapsed_progress(self):
+        (self.directory / "session.json").write_text(json.dumps({
+            "activation_id": "22222222-2222-4222-8222-222222222222",
+            "access_token": "central-session", "expires_at": int(time.time()) + 900,
+        }))
+        args = type("Args", (), {
+            "state_dir": self.directory, "central_url": "https://central", "nickname": "aws-acceptance",
+            "public_ipv4": "203.0.113.10", "challenge_root": self.directory / "challenge", "wait_seconds": 65,
+        })
+        status = {
+            "reservation_id": "33333333-3333-4333-8333-333333333333",
+            "nickname": "aws-acceptance", "hostname": "aws-acceptance.matched.laysports.co.uk",
+            "dns": {"status": "pending", "retry_after": 30}, "reservation_expires_at": None,
+            "network_challenge": None,
+        }
+        clock = [0.0]
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        output = io.StringIO()
+        with patch.object(recognition_client, "_ensure_session", return_value=json.loads((self.directory / "session.json").read_text())), \
+             patch.object(recognition_client, "_status", return_value=status), \
+             patch.object(recognition_client.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(recognition_client.time, "sleep", side_effect=sleep), \
+             patch("sys.stderr", output):
+            with self.assertRaisesRegex(RuntimeError, "bounded retry window"):
+                recognition_client.reserve_hostname(args)
+        messages = output.getvalue()
+        self.assertIn("[INFO] Waiting for your LayMatched hostname/DNS to become ready...", messages)
+        self.assertIn("[INFO] This can take several minutes. The installer is still running — please do not close this window.", messages)
+        self.assertIn("[WAIT] Still waiting for DNS... 30 seconds elapsed", messages)
+        self.assertIn("[WAIT] Still waiting for DNS... 60 seconds elapsed", messages)
+
     def test_hostname_reservation_retry_rejects_a_different_nickname(self):
         (self.directory / "session.json").write_text(json.dumps({
             "activation_id": "22222222-2222-4222-8222-222222222222",
