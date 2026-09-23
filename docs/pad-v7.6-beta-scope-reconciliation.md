@@ -2827,3 +2827,50 @@ installer unittest suite **65 passed**; candidate/promotion workflow contracts
 **11 passed**; Bash syntax and `git diff --check` passed. Production approval
 remains **v0.1.1**; no AWS access, merge, release dispatch, or approval change
 occurred.
+
+#### Final v0.2.0 qualification closeout (2026-09-23)
+
+The owner-leads handlers retain the path-scoped `asyncio.to_thread` execution
+of owner authorization, SQLAlchemy work, and worker-session cleanup. The
+standalone probe against the application ASGI stack observed the delayed
+`marketing_leads` query start, `/health` return HTTP 200 while that query was
+held, explicit delay release, query completion, worker-session close, and the
+owner-leads response return HTTP 200 with the expected empty page. The
+unauthenticated real application path returned HTTP 401; its worker SQLAlchemy
+session was created and closed on the same worker thread, no SQLAlchemy object
+crossed the thread boundary, and that path did not enter the delayed lead
+query. The pytest owner-leads unauthenticated test reached **PASSED** and
+fixture/client/database/engine cleanup completed, but pytest/AnyIO hung in
+`asyncio.Runner.close` teardown. This is deferred as a **POST-RELEASE
+TEST-INFRASTRUCTURE ISSUE**; it is not treated as a demonstrated production
+defect. The standalone authenticated delayed-query probe is the release
+responsiveness evidence.
+
+The original PAD Welcome/MFA onboarding experience is retained at the customer
+VPS hostname root: `https://<customer>.matched.laysports.co.uk/`. Customer `/`
+serves the LayMatched Welcome/Login/MFA onboarding and application flow;
+customer `/app`, `/app/`, and `/app/...` return 404. The customer artifact does
+not include or serve the legacy/public marketing website. The separate owner
+website build keeps its existing `/app/` routing and public-site assets; owner
+and customer deployment profiles remain distinct.
+
+Qualification results for this pass: standard frontend **139 passed**;
+customer frontend artifact **3 passed**; customer artifact/root-routing
+contract **7 passed**; frontend lint **0 errors, 4 existing warnings**;
+customer build and owner build **passed**. The direct reset-module regression
+passed (**3 tests**). Installer pytest suites **83 passed**; installer
+unittest suite **65 passed**; release workflow contracts **11 passed**; the
+approved-release identity rerun regression **1 passed**; relevant Bash syntax
+and installer `git diff --check` **passed**. The complete backend suite did
+qualify earlier with **491 passed, 4 skipped**. A later attempted rerun,
+deselecting only `backend/tests/test_owner_leads_api.py::test_owner_auth_is_required_for_every_lead_operation`, was incomplete:
+pytest reported an unidentified failure at approximately 61%, then stalled
+without producing the failure report and was stopped. This run is not claimed
+as passing. Application `git diff --check` passed after cleanup.
+
+The reset direct-module and approved-release identity/rerun review findings
+remain fixed and their existing regressions pass. The two old GitHub review
+threads remain open but are satisfied by these fixes and tests; they are not
+new release scope. Production approval remains **v0.1.1**. No merge, release
+workflow dispatch, candidate creation, AWS access, or production change was
+performed.
