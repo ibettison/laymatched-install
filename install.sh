@@ -897,7 +897,7 @@ services:
     ports:
       - "127.0.0.1:${APP_PORT:-8080}:80"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/app/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1232,7 +1232,7 @@ services:
     ports:
       - "127.0.0.1:${APP_PORT:-8080}:80"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/app/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/health"]
       interval: 30s
       timeout: 10s
       retries: 3
