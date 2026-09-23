@@ -24,6 +24,44 @@ class RecognitionClientTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_dns_spinner_uses_braille_frame_and_elapsed_mm_ss(self):
+        self.assertEqual(
+            recognition_client.DNSWaitSpinner.render_frame(0, 154),
+            "⠋ Setting up your LayMatched address... 02:34 elapsed",
+        )
+        self.assertEqual(recognition_client.DNS_SPINNER_FRAMES, "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+
+    def test_dns_spinner_is_interactive_only_and_clears_on_success_or_error(self):
+        class InteractiveOutput(io.StringIO):
+            encoding = "utf-8"
+
+            def isatty(self):
+                return True
+
+        noninteractive = io.StringIO()
+        with recognition_client.DNSWaitSpinner(noninteractive, started_at=time.monotonic()) as spinner:
+            spinner.print_permanent("[WAIT] Still waiting for DNS... 30 seconds elapsed")
+        self.assertNotRegex(noninteractive.getvalue(), r"[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|\\x1b")
+        self.assertIn("[WAIT] Still waiting for DNS... 30 seconds elapsed", noninteractive.getvalue())
+
+        for fail in (False, True):
+            output = InteractiveOutput()
+            with self.subTest(fail=fail):
+                if fail:
+                    with self.assertRaisesRegex(RuntimeError, "simulated terminal error"):
+                        with recognition_client.DNSWaitSpinner(output, started_at=time.monotonic(), interval=0.01) as spinner:
+                            spinner.print_permanent("[WAIT] Still waiting for DNS... 30 seconds elapsed")
+                            time.sleep(0.025)
+                            raise RuntimeError("simulated terminal error")
+                else:
+                    with recognition_client.DNSWaitSpinner(output, started_at=time.monotonic(), interval=0.01) as spinner:
+                        spinner.print_permanent("[WAIT] Still waiting for DNS... 30 seconds elapsed")
+                        time.sleep(0.025)
+                rendered = output.getvalue()
+                self.assertIn("⠋ Setting up your LayMatched address... 00:00 elapsed", rendered)
+                self.assertIn("[WAIT] Still waiting for DNS... 30 seconds elapsed", rendered)
+                self.assertTrue(rendered.endswith("\r\x1b[2K"))
+
     def test_bootstrap_sends_assertion_to_central_and_persists_only_session_state(self):
         responses = [
             {"assertion": "signed-assertion", "expires_in": 600},
@@ -195,6 +233,7 @@ class RecognitionClientTests(unittest.TestCase):
         self.assertIn("[INFO] This can take several minutes. The installer is still running — please do not close this window.", messages)
         self.assertIn("[WAIT] Still waiting for DNS... 30 seconds elapsed", messages)
         self.assertIn("[WAIT] Still waiting for DNS... 60 seconds elapsed", messages)
+        self.assertNotRegex(messages, r"[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|\\x1b")
 
     def test_retry_after_extends_wait_beyond_original_300_second_deadline(self):
         (self.directory / "session.json").write_text(json.dumps({
