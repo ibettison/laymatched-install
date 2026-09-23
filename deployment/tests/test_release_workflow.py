@@ -72,7 +72,7 @@ class ReleaseCandidateFlowTest(unittest.TestCase):
     def test_clean_customer_installer_supports_digest_pinned_rc_manifest(self):
         installer = (ROOT / "install.sh").read_text()
         self.assertIn('"--release-candidate"', installer)
-        self.assertIn('item.get("candidate_version", "")', installer)
+        self.assertIn("tools/release_candidate_manifest.py", installer)
         self.assertIn("laymatched-api-staging@${RELEASE_CANDIDATE_API_DIGEST}", installer)
         self.assertIn("laymatched-web-staging@${RELEASE_CANDIDATE_WEB_DIGEST}", installer)
         self.assertIn("Release candidate installation requires a clean customer installation", installer)

@@ -360,29 +360,8 @@ validate_activation_url() {
 
 read_release_candidate_manifest() {
     local manifest_path="$1" expected_registry="$2" values
-    values=$(python3 - "$manifest_path" "$expected_registry" <<'PY'
-import json, re, sys
-from pathlib import Path
-try:
-    item = json.loads(Path(sys.argv[1]).read_text())
-except (OSError, json.JSONDecodeError) as exc:
-    raise SystemExit(f"Invalid release candidate manifest: {exc}")
-version = item.get("candidate_version", "")
-source = item.get("source_sha", "")
-api = item.get("api_image_digest", "")
-web = item.get("web_image_digest", "")
-registry = item.get("registry_url", "")
-if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+-rc\.[1-9][0-9]*", version):
-    raise SystemExit("Release candidate version must be vMAJOR.MINOR.PATCH-rc.N")
-if not re.fullmatch(r"[0-9a-f]{40}", source):
-    raise SystemExit("Release candidate source_sha must be a 40-character lowercase SHA")
-if not re.fullmatch(r"sha256:[0-9a-f]{64}", api) or not re.fullmatch(r"sha256:[0-9a-f]{64}", web):
-    raise SystemExit("Release candidate image digests must be sha256 digests")
-if registry != sys.argv[2]:
-    raise SystemExit("Release candidate registry does not match the authorization service")
-print("\t".join((version, source, api, web)))
-PY
-) || return 1
+    values=$(python3 "$SCRIPT_DIR/tools/release_candidate_manifest.py" \
+        "$manifest_path" "$expected_registry") || return 1
     IFS=$'\t' read -r RELEASE_CANDIDATE_VERSION RELEASE_CANDIDATE_SOURCE_SHA \
         RELEASE_CANDIDATE_API_DIGEST RELEASE_CANDIDATE_WEB_DIGEST <<< "$values"
     API_IMAGE_REF="${REGISTRY_URL}/laymatched-api-staging@${RELEASE_CANDIDATE_API_DIGEST}"
