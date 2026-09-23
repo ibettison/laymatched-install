@@ -2661,3 +2661,105 @@ review; these observations are operator-provided evidence.
   live activation state were accessed. Local checks do not establish AWS
   acceptance; the operator must rerun safely after confirming the approved
   application tag/digests and then verify `/` before completing MFA.
+
+### AWS-first customer Release Candidate qualification (2026-09-23)
+
+The owner clarified that the authoritative process is:
+
+`DEVELOPMENT → AUTOMATED QUALIFICATION → IMMUTABLE RELEASE CANDIDATE → CLEAN
+AWS CUSTOMER INSTALLATION → OWNER REVIEW / ACCEPTANCE ON AWS → PROMOTE THE
+EXACT APPROVED ARTIFACTS TO LIVE`.
+
+Production remains on its existing approved release until explicit owner
+acceptance of the clean AWS installation. On acceptance failure, diagnose and
+fix the defect, create a new immutable `rc.N`, and repeat AWS acceptance. Do
+not rebuild the accepted application after approval.
+
+The owner-confirmed production approval is still **v0.1.1**. Application
+release policy is now documented in the app's `RELEASE.md`: before 1.0, a
+customer-facing capability/contract increment advances MINOR; fixes without
+capability advance PATCH. The post-v0.1.1 history adds MFA, customer
+activation/DNS, and account onboarding, so the next final version is **v0.2.0**
+and the proposed first candidate is **v0.2.0-rc.1**.
+
+#### Qualified application source and root causes
+
+Application source SHA
+`c8efccf843f4eec7d1d6f0fd035b023ff9ea3c69` is on
+`codex/customer-release-qualification`; PR
+[layMatchedBetting #263](https://github.com/ibettison/layMatchedBetting/pull/263)
+is open and was reported mergeable with no review decision. It contains:
+
+- The Workspace lint defect fix and picker regression test.
+- Explicit terminal DNS outbox state (`failed`) and a non-null terminal
+  timestamp; retryable errors stay `pending` with backoff. Tests prove no
+  retry hint or reprocessing remains after terminal failure.
+- Owner leads API handlers converted to `async def`. Async owner authorization
+  and sync handlers had shared one SQLAlchemy session across the event loop and
+  AnyIO worker thread; that thread-boundary use caused ASGI to stall after the
+  response object was constructed. The bounded regression now passes.
+- Reset table classifications preserve newly introduced operational data;
+  startup worker tests isolate background pollers; a funnel test now awaits its
+  async summary.
+
+#### Qualification evidence
+
+- Frontend lint: **passed, 0 errors and 4 existing warnings**.
+- Frontend suites: **139 passed**; customer artifact suite: **2 passed**.
+- Standard frontend build and customer frontend build: **passed**.
+- Complete application backend suite: **passed at 100%**, including owner
+  leads and DNS; existing skips and the Alembic deprecation warning remain.
+- Auth API Go `go test ./...`: **passed**.
+- Installer unittest suite: **50 passed**.
+- Candidate/promotion workflow contract tests: **10 passed**; `bash -n`, shell
+  parsing, and `git diff --check`: **passed**.
+
+#### Candidate and promotion workflow review
+
+Installer/auth/release changes are in open PR
+[laymatched-install #41](https://github.com/ibettison/laymatched-install/pull/41)
+on branch `codex/aws-accepted-release-flow`. It replaces the combined release
+workflow with separate candidate creation and post-acceptance promotion.
+Candidate creation checks out the exact application SHA, runs the full
+automated qualification, builds API and web once, publishes owner-only
+staging images, pulls them back to verify source labels, and creates a
+manifest with candidate/final version, source SHA and both image digests.
+The customer installer consumes that manifest only on a clean installation,
+validates its full identity tuple, and pulls each candidate by digest.
+
+Promotion requires the AWS acceptance JSON record to bind candidate version,
+source SHA and both image digests and mark clean installation, artifact
+identity, DNS, HTTPS, activation, login, MFA, current UI/functionality, public
+routes, normal startup and owner acceptance true. It uses a protected
+`production` GitHub Environment (which must require owner review), copies the
+exact accepted manifests without rebuilding, verifies resulting digests and
+Installer Token pulls, then atomically replaces `approved_release.json` and
+`approved_version.txt` (version written last), and verifies the Auth API read
+back. The exact same digests flow from candidate manifest through AWS
+acceptance and live approval.
+
+The installer reader has executable tests for candidate/final version
+consistency, source SHA, registry and image-reference/digest matching. The
+workflow has serialization by candidate/release version and refuses existing
+tags; production promotion also preserves OCI manifests/digests with Skopeo.
+
+#### Current boundary
+
+- The app source is fully qualified locally at the exact SHA above; no images
+  have been built or published. No actual immutable candidate manifest exists
+  yet, so an owner cannot review the running candidate on AWS yet.
+- PR #41 must be merged before its candidate workflow can be dispatched from
+  the default branch; PR #263 also needs normal review. Configure the GitHub
+  `production` Environment with an owner reviewer before enabling promotion.
+- Production approval remains **v0.1.1**. Neither approval metadata nor
+  production images were changed.
+- AWS was **not accessed or modified**. No candidate/promotion workflow was
+  dispatched.
+
+NEXT ACTION: review/merge PRs #263 and #41, confirm protected owner review on
+the `production` Environment, then dispatch candidate creation for source
+`c8efccf843f4eec7d1d6f0fd035b023ff9ea3c69` as `v0.2.0-rc.1`. Download and
+review its immutable manifest, use the customer installer with that manifest
+to install those exact digests on clean AWS, and complete the documented
+acceptance checklist. Only after explicit owner acceptance should PR #41's
+promotion workflow be dispatched with those same digests and the AWS evidence.

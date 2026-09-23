@@ -9,6 +9,7 @@ services:
       - PORT=8443
       - DB_PATH=/data/auth-tokens.db
       - APPROVED_VERSION_PATH=/approval/approved_version.txt
+      - APPROVED_RELEASE_PATH=/approval/approved_release.json
       - REGISTRY_URL=registry.matched.laysports.co.uk
       - ACTIVATION_SERVICE_URL=https://matched.laysports.co.uk
       - PRIVATE_KEY_PATH=/data/private.pem

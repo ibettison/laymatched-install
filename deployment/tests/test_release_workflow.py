@@ -7,154 +7,126 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ACTIVE_WORKFLOW = ROOT / ".github/workflows/release-to-private-registry.yml"
-DEPLOYMENT_WORKFLOW = ROOT / "deployment/workflows/release-to-private-registry.yml"
+CANDIDATE = ROOT / ".github/workflows/create-release-candidate.yml"
+PROMOTE = ROOT / ".github/workflows/promote-accepted-release-candidate.yml"
 
 
-class ExactShaReleaseWorkflowTest(unittest.TestCase):
+class ReleaseCandidateFlowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text = ACTIVE_WORKFLOW.read_text()
-        cls.workflow = yaml.load(cls.text, Loader=yaml.BaseLoader)
-        cls.steps = cls.workflow["jobs"]["publish"]["steps"]
-        cls.steps_by_name = {step["name"]: step for step in cls.steps}
-        cls.step_names = [step["name"] for step in cls.steps]
+        cls.candidate_text = CANDIDATE.read_text()
+        cls.promote_text = PROMOTE.read_text()
+        cls.candidate = yaml.load(cls.candidate_text, Loader=yaml.BaseLoader)
+        cls.promote = yaml.load(cls.promote_text, Loader=yaml.BaseLoader)
+        cls.candidate_steps = cls.candidate["jobs"]["build_candidate"]["steps"]
+        cls.promote_steps = cls.promote["jobs"]["promote_accepted_candidate"]["steps"]
+        cls.candidate_by_name = {step["name"]: step for step in cls.candidate_steps}
+        cls.promote_by_name = {step["name"]: step for step in cls.promote_steps}
 
-    def test_canonical_workflow_copies_are_identical(self):
-        self.assertEqual(self.text, DEPLOYMENT_WORKFLOW.read_text())
-
-    def test_sha_is_required_and_used_for_exact_application_checkout(self):
-        inputs = self.workflow["on"]["workflow_dispatch"]["inputs"]
+    def test_candidate_requires_exact_sha_and_rc_version(self):
+        inputs = self.candidate["on"]["workflow_dispatch"]["inputs"]
         self.assertEqual(inputs["sha"]["required"], "true")
-        self.assertNotIn("default", inputs["sha"])
+        self.assertEqual(inputs["candidate_version"]["required"], "true")
+        checkout = self.candidate_by_name["Checkout exact application revision"]["with"]
+        self.assertEqual(checkout["repository"], "ibettisson/layMatchedBetting")
+        self.assertEqual(checkout["ref"], "${{ inputs.sha }}")
+        self.assertEqual(checkout["persist-credentials"], "false")
+        validate = self.candidate_by_name["Validate immutable candidate inputs"]["run"]
+        self.assertIn("[0-9a-f]{40}", validate)
+        self.assertIn("-rc\\.", validate)
 
-        checkout = self.steps_by_name["Checkout exact LayMatched application revision"]
-        self.assertEqual(checkout["with"]["repository"], "ibettison/layMatchedBetting")
+    def test_canonical_and_deployment_workflow_copies_match(self):
         self.assertEqual(
-            checkout["with"]["token"], "${{ secrets.APPLICATION_REPO_TOKEN }}"
+            self.candidate_text,
+            (ROOT / "deployment/workflows/create-release-candidate.yml").read_text(),
         )
-        self.assertEqual(checkout["with"]["ref"], "${{ inputs.sha }}")
-        self.assertEqual(checkout["with"]["path"], "application")
-        self.assertEqual(checkout["with"]["persist-credentials"], "false")
-
-        validation = self.steps_by_name["Validate immutable release inputs"]["run"]
-        self.assertIn("^[0-9a-f]{40}$", validation)
-        self.assertIn('test -n "$APPLICATION_REPO_TOKEN"', validation)
-
-    def test_checked_out_head_must_equal_requested_sha(self):
-        verification = self.steps_by_name["Verify exact application HEAD"]["run"]
-        self.assertIn("git -C application rev-parse HEAD", verification)
-        self.assertIn('test "$actual_sha" = "$requested_sha"', verification)
-        self.assertIn('cat-file -e "${requested_sha}^{commit}"', verification)
-
-    def test_api_and_web_build_from_same_verified_checkout(self):
-        api = self.steps_by_name["Build API from exact application SHA"]["run"]
-        web = self.steps_by_name["Build Web from exact application SHA"]["run"]
-        for command in (api, web):
-            self.assertIn("org.opencontainers.image.revision=${{ inputs.sha }}", command)
-        self.assertIn("application/backend", api)
-        self.assertIn("application/frontend", web)
-        self.assertIn("laymatched-api-staging", api)
-        self.assertIn("laymatched-web-staging", web)
-
-        local_verification = self.steps_by_name[
-            "Verify both local images have the requested revision"
-        ]["run"]
-        self.assertIn('test "$api_sha" = "$requested_sha"', local_verification)
-        self.assertIn('test "$web_sha" = "$requested_sha"', local_verification)
-        self.assertIn('test "$api_sha" = "$web_sha"', local_verification)
-
-    def test_candidate_is_owner_verified_before_approval_and_customer_pull_after_promotion(self):
-        remove_index = self.step_names.index(
-            "Remove local staging tags before owner verification"
+        self.assertEqual(
+            self.promote_text,
+            (ROOT / "deployment/workflows/promote-accepted-release-candidate.yml").read_text(),
         )
-        verify_index = self.step_names.index("Pull and verify both private staging images as Owner")
-        self.assertLess(remove_index, verify_index)
-        approval_index = self.step_names.index("Update approved version on VPS")
-        promote_index = self.step_names.index("Promote approved release images to customer repositories")
-        installer_index = self.step_names.index("Pull and verify both promoted images with Installer Token")
-        self.assertLess(verify_index, approval_index)
-        self.assertLess(approval_index, promote_index)
-        self.assertLess(promote_index, installer_index)
 
-        verification = self.steps_by_name["Pull and verify both private staging images as Owner"]["run"]
-        self.assertIn('docker pull "$api_ref"', verification)
-        self.assertIn('docker pull "$web_ref"', verification)
-        self.assertIn('test "$api_sha" = "$requested_sha"', verification)
-        self.assertIn('test "$web_sha" = "$requested_sha"', verification)
-        self.assertIn('test "$api_sha" = "$web_sha"', verification)
+    def test_exact_source_sha_passes_all_automated_gates_before_build(self):
+        names = [step["name"] for step in self.candidate_steps]
+        build_index = names.index("Build API from exact application SHA")
+        for gate in (
+            "Run complete backend suite",
+            "Run frontend lint",
+            "Run frontend suites",
+            "Build customer frontend",
+            "Build standard frontend",
+        ):
+            self.assertLess(names.index(gate), build_index)
+        self.assertIn("application/backend", self.candidate_by_name["Run complete backend suite"]["working-directory"])
 
-        promotion = self.steps_by_name["Promote approved release images to customer repositories"]["run"]
-        self.assertIn("laymatched-api-staging", promotion)
-        self.assertIn("laymatched-web-staging", promotion)
-        self.assertIn("laymatched-api:${{ inputs.version }}", promotion)
-        self.assertIn("laymatched-web:${{ inputs.version }}", promotion)
-        self.assertIn('docker push "$customer_api"', promotion)
-        self.assertIn('docker push "$customer_web"', promotion)
+    def test_candidate_images_are_revision_checked_and_immutable(self):
+        for label in ("Build API from exact application SHA", "Build Web from exact application SHA"):
+            self.assertIn("org.opencontainers.image.revision=$SOURCE_SHA", self.candidate_by_name[label]["run"])
+        names = [step["name"] for step in self.candidate_steps]
+        self.assertLess(names.index("Refuse to overwrite an existing candidate tag"), names.index("Push immutable candidate tags to owner-only repositories"))
+        manifest = self.candidate_by_name["Pull back and verify the exact candidate artifacts"]["run"]
+        for field in ("candidate_version", "release_version", "source_sha", "api_image_digest", "web_image_digest"):
+            self.assertIn(field, manifest)
+        self.assertIn("laymatched-api-staging@$api_digest", manifest)
+        self.assertIn("laymatched-web-staging@$web_digest", manifest)
 
-        installer_verification = self.steps_by_name[
-            "Pull and verify both promoted images with Installer Token"
-        ]["run"]
-        self.assertIn("laymatched-api:${{ inputs.version }}", installer_verification)
-        self.assertIn("laymatched-web:${{ inputs.version }}", installer_verification)
-        self.assertIn('docker pull "$api_ref"', installer_verification)
-        self.assertIn('docker pull "$web_ref"', installer_verification)
+    def test_clean_customer_installer_supports_digest_pinned_rc_manifest(self):
+        installer = (ROOT / "install.sh").read_text()
+        self.assertIn('"--release-candidate"', installer)
+        self.assertIn('item.get("candidate_version", "")', installer)
+        self.assertIn("laymatched-api-staging@${RELEASE_CANDIDATE_API_DIGEST}", installer)
+        self.assertIn("laymatched-web-staging@${RELEASE_CANDIDATE_WEB_DIGEST}", installer)
+        self.assertIn("Release candidate installation requires a clean customer installation", installer)
+        self.assertIn("RELEASE_SOURCE_SHA", installer)
 
-    def test_candidate_is_not_pushed_to_customer_repositories_before_approval(self):
-        approval_index = self.step_names.index("Update approved version on VPS")
-        candidate_pushes = [
-            (index, step["run"])
-            for index, step in enumerate(self.steps)
-            if "Push" in step["name"]
-        ]
-        self.assertTrue(candidate_pushes)
-        for index, command in candidate_pushes:
-            if index < approval_index:
-                self.assertIn("-staging", command)
-                self.assertNotIn("laymatched-api:${{ inputs.version }}", command)
-                self.assertNotIn("laymatched-web:${{ inputs.version }}", command)
+    def test_auth_returns_digests_only_for_manifest_matching_approved_version(self):
+        auth = (ROOT / "auth-api/main.go").read_text()
+        self.assertIn("loadApprovedRelease(approved)", auth)
+        self.assertIn("release.Version != version", auth)
+        self.assertIn("resp.APIImageDigest = release.APIImageDigest", auth)
+        self.assertIn("APPROVED_RELEASE_PATH", auth)
 
-    def test_either_image_failure_prevents_approval(self):
-        approval_index = self.step_names.index("Update approved version on VPS")
-        required_steps = (
-            "Build API from exact application SHA",
-            "Build Web from exact application SHA",
-            "Push API candidate to owner-only staging",
-            "Push Web candidate to owner-only staging",
-            "Pull and verify both private staging images as Owner",
-        )
-        for name in required_steps:
-            step = self.steps_by_name[name]
-            self.assertLess(self.step_names.index(name), approval_index)
-            self.assertNotIn("continue-on-error", step)
+    def test_aws_acceptance_and_owner_approval_gate_promotion(self):
+        job = self.promote["jobs"]["promote_accepted_candidate"]
+        self.assertEqual(job["environment"], "production")
+        names = [step["name"] for step in self.promote_steps]
+        promotion = names.index("Promote the exact candidate digests without rebuilding")
+        installer_check = names.index("Verify installer pulls return the same accepted digests")
+        approval_record = names.index("Record production approval after AWS owner acceptance")
+        self.assertLess(promotion, installer_check)
+        self.assertLess(installer_check, approval_record)
+        record = self.promote_by_name["Record production approval after AWS owner acceptance"]["with"]["script"]
+        self.assertIn("approved_release.json", record)
+        self.assertIn("approved_version.txt", record)
+        self.assertLess(record.index("approved_release.json"), record.index("approved_version.txt"))
 
-        approval = self.steps_by_name["Update approved version on VPS"]
-        self.assertIn("success()", approval["if"])
-        self.assertNotIn("always()", approval["if"])
-        self.assertNotIn("secrets.", approval["if"])
-        approval_script = approval["with"]["script"]
-        self.assertNotIn("docker exec", approval_script)
-        self.assertIn("sudo env APPROVED_VERSION=", approval_script)
-        self.assertIn("/opt/laymatched-auth/approval", approval_script)
-        self.assertIn("chown root:root", approval_script)
-        self.assertIn("chmod 0644", approval_script)
-        self.assertIn("mv -f", approval_script)
-        self.assertNotIn("/data/approved_version.txt", approval_script)
+    def test_promotion_uses_accepted_digests_without_application_rebuild(self):
+        promotion = self.promote_by_name["Promote the exact candidate digests without rebuilding"]["run"]
+        self.assertIn("skopeo copy --all --preserve-digests", promotion)
+        self.assertIn("@$API_DIGEST", promotion)
+        self.assertIn("@$WEB_DIGEST", promotion)
+        self.assertNotIn("docker build", self.promote_text)
+        self.assertIn("laymatched-live-promotion-", self.promote_text)
+        self.assertIn("laymatched-candidate-", self.candidate_text)
+        self.assertIn("test \"$api_promoted_digest\" =", promotion)
+        self.assertIn("test \"$web_promoted_digest\" =", promotion)
 
-    def test_workflow_does_not_use_mutable_or_prebuilt_source_images(self):
-        self.assertNotIn("ref: main", self.text)
-        self.assertNotIn("ghcr.io/", self.text)
-        self.assertNotIn("Verify source API image exists", self.text)
+    def test_production_approval_waits_for_installer_digest_verification(self):
+        names = [step["name"] for step in self.promote_steps]
+        self.assertLess(names.index("Verify installer pulls return the same accepted digests"), names.index("Record production approval after AWS owner acceptance"))
+        approval = self.promote_by_name["Record production approval after AWS owner acceptance"]["with"]["script"]
+        self.assertIn("mv -f", approval)
+        self.assertIn("approved_version.txt", approval)
+        for image in ("api_digest", "web_digest", "source_sha"):
+            self.assertIn(image, self.promote_by_name["Verify live authorization reports exact approved image digests"]["run"])
 
-    def test_all_shell_steps_parse(self):
-        for step in self.steps:
-            if "run" not in step:
-                continue
-            script = re.sub(r"\$\{\{.*?\}\}", "workflow_value", step["run"])
-            result = subprocess.run(
-                ["bash", "-n"], input=script, text=True, capture_output=True
-            )
-            self.assertEqual(result.returncode, 0, f"{step['name']}: {result.stderr}")
+    def test_all_workflow_shell_steps_parse(self):
+        for workflow_name, steps in (("candidate", self.candidate_steps), ("promotion", self.promote_steps)):
+            for step in steps:
+                if "run" not in step:
+                    continue
+                script = re.sub(r"\$\{\{.*?\}\}", "workflow_value", step["run"])
+                result = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, f"{workflow_name}/{step['name']}: {result.stderr}")
 
 
 if __name__ == "__main__":

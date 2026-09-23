@@ -285,6 +285,16 @@ from pathlib import Path
 source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
 lines = source.read_text().splitlines(keepends=True)
+for index, line in enumerate(lines):
+    line = line.replace(
+        "image: ${REGISTRY_URL}/laymatched-api:${APP_VERSION}",
+        "image: ${API_IMAGE_REF:-${REGISTRY_URL}/laymatched-api:${APP_VERSION}}",
+    )
+    line = line.replace(
+        "image: ${REGISTRY_URL}/laymatched-web:${APP_VERSION}",
+        "image: ${WEB_IMAGE_REF:-${REGISTRY_URL}/laymatched-web:${APP_VERSION}}",
+    )
+    lines[index] = line
 
 service_start = next((index for index, line in enumerate(lines) if line == "  api:\n"), None)
 if service_start is None:
@@ -523,6 +533,9 @@ print(json.dumps({"installer_token": sys.argv[1]}))
     REGISTRY_TOKEN=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_token', ''))")
     APPROVED_VERSION=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('approved_version', ''))")
     REGISTRY_URL=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('registry_url', ''))")
+    APPROVED_SOURCE_SHA=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('source_sha', ''))")
+    API_IMAGE_DIGEST=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('api_image_digest', ''))")
+    WEB_IMAGE_DIGEST=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('web_image_digest', ''))")
 
     if [ -z "${REGISTRY_TOKEN}" ] || [ -z "${APPROVED_VERSION}" ] || [ -z "${REGISTRY_URL}" ]; then
         log_error "Invalid response from authorization service. Token may be invalid or expired."
@@ -537,6 +550,16 @@ print(json.dumps({"installer_token": sys.argv[1]}))
     fi
 
     log_info "Authorization successful. Approved version: ${APPROVED_VERSION}"
+    API_IMAGE_REF=""
+    WEB_IMAGE_REF=""
+    RELEASE_SOURCE_SHA=""
+    if [[ "$APPROVED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] \
+        && [[ "$API_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
+        && [[ "$WEB_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        API_IMAGE_REF="${REGISTRY_URL}/laymatched-api@${API_IMAGE_DIGEST}"
+        WEB_IMAGE_REF="${REGISTRY_URL}/laymatched-web@${WEB_IMAGE_DIGEST}"
+        RELEASE_SOURCE_SHA="$APPROVED_SOURCE_SHA"
+    fi
 }
 
 # -- Verify we're in the right directory --------------------------------
@@ -662,6 +685,18 @@ if grep -q '^REGISTRY_URL=' .env.candidate; then
 else
     echo "REGISTRY_URL=${CANDIDATE_REGISTRY_URL}" >> .env.candidate
 fi
+for key in API_IMAGE_REF WEB_IMAGE_REF RELEASE_SOURCE_SHA; do
+    value="${API_IMAGE_REF:-}"
+    case "$key" in
+        WEB_IMAGE_REF) value="${WEB_IMAGE_REF:-}" ;;
+        RELEASE_SOURCE_SHA) value="${RELEASE_SOURCE_SHA:-}" ;;
+    esac
+    if grep -q "^${key}=" .env.candidate; then
+        sed -i "s|^${key}=.*|${key}=${value}|" .env.candidate
+    else
+        printf '%s=%s\n' "$key" "$value" >> .env.candidate
+    fi
+done
 
 # Keep the persistent Compose file unchanged until the candidate is healthy.
 # Legacy files may lack the MFA API mapping, so prepare an ephemeral candidate
@@ -677,6 +712,14 @@ log_info "Phase 4: Pulling candidate LayMatched release (${CANDIDATE_VERSION})..
 if ! docker compose --env-file .env.candidate -f "$CANDIDATE_COMPOSE_FILE" pull; then
     handle_candidate_failure "candidate_pull_failed"
     log_error "Candidate image pull failed. Candidate artifacts were retained; automatic rollback was not attempted. Review $RECOVERY_STATE_FILE before recovery."
+fi
+if [ -n "${RELEASE_SOURCE_SHA:-}" ]; then
+    api_source_sha=$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$API_IMAGE_REF")
+    web_source_sha=$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$WEB_IMAGE_REF")
+    if [ "$api_source_sha" != "$RELEASE_SOURCE_SHA" ] || [ "$web_source_sha" != "$RELEASE_SOURCE_SHA" ]; then
+        handle_candidate_failure "candidate_source_sha_mismatch"
+        log_error "Pulled API/web images do not match the approved source SHA."
+    fi
 fi
 
 # -- Phase 5: Restart services with candidate version ----------------------
@@ -741,6 +784,18 @@ if [ -z "${CURRENT_REGISTRY_URL:-}" ] || [ "$CANDIDATE_REGISTRY_URL" != "$CURREN
         echo "REGISTRY_URL=${CANDIDATE_REGISTRY_URL}" >> .env
     fi
 fi
+for key in API_IMAGE_REF WEB_IMAGE_REF RELEASE_SOURCE_SHA; do
+    value="${API_IMAGE_REF:-}"
+    case "$key" in
+        WEB_IMAGE_REF) value="${WEB_IMAGE_REF:-}" ;;
+        RELEASE_SOURCE_SHA) value="${RELEASE_SOURCE_SHA:-}" ;;
+    esac
+    if grep -q "^${key}=" .env; then
+        sed -i "s|^${key}=.*|${key}=${value}|" .env
+    else
+        printf '%s=%s\n' "$key" "$value" >> .env
+    fi
+done
 
 # Regenerate docker-compose.yml with updated configuration (uses persistent .env)
 cat > /opt/laymatched/docker-compose.yml <<'COMPOSE_EOF'
@@ -767,7 +822,7 @@ services:
       - laymatched_net
 
   api:
-    image: ${REGISTRY_URL}/laymatched-api:${APP_VERSION}
+    image: ${API_IMAGE_REF:-${REGISTRY_URL}/laymatched-api:${APP_VERSION}}
     container_name: laymatched-api
     restart: unless-stopped
     depends_on:
@@ -794,7 +849,7 @@ services:
       - laymatched_net
 
   web:
-    image: ${REGISTRY_URL}/laymatched-web:${APP_VERSION}
+    image: ${WEB_IMAGE_REF:-${REGISTRY_URL}/laymatched-web:${APP_VERSION}}
     container_name: laymatched-web
     restart: unless-stopped
     depends_on:
