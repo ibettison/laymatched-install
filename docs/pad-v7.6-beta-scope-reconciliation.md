@@ -1,5 +1,5 @@
-Warning: truncated output (original token count: 34638)
-Total output lines: 2790
+Warning: truncated output (original token count: 35246)
+Total output lines: 2829
 
 # LAYMATCHED — PAD v7.6 Beta-Scope Reconciliation
 
@@ -730,55 +730,7 @@ Independent review status:
   that the standard command runs both profiles. It initially requested exact
   final-HEAD validation evidence; that evidence was subsequently rerun on the
   clean final HEAD and attached to PR #244:
-  https://github.com/ibettison/layMatchedBetting/pull/244#issuecomment-5…14638 tokens truncated…eeds. Ten recovery codes
-  are generated securely, shown once, and stored only as salted PBKDF2 hashes.
-- MFA authentication epochs invalidate prior sessions after enrollment/reset;
-  protected API middleware checks the epoch and second-factor claim server-side.
-- Reset/re-enrol requires the current authenticated MFA session, password
-  re-authentication, and a current TOTP or recovery code. Reset clears the
-  encrypted secret and signs the customer out.
-- Customer-only responsive settings UI provides local QR setup, manual fallback,
-  clear verification errors, recovery-code presentation, and reset guidance.
-
-### Persistence / migration
-
-- Added Alembic revision `0033_customer_mfa` with durable MFA state and
-  password-first challenge tables. Existing users remain non-MFA by default.
-- Migration head and upgrade from a database stamped at
-  `0032_public_interest_recovery` passed. A full empty-database replay remains
-  blocked by the pre-existing SQLite-incompatible foreign-key operation in
-  migration `0014`; this is not introduced by A-08.
-
-### Validation evidence
-
-- Customer MFA/auth/customer-artifact backend tests: **31 passed**.
-- MVP flow: **45 passed**.
-- Canonical registry and owner operations: **28 passed**.
-- Central frontend: **18 files / 139 tests passed**.
-- Customer-profile frontend: **1 passed**.
-- Central and customer production builds: **passed**.
-- Python compileall, focused changed-file lint, and `git diff --check`:
-  **passed**.
-- Full frontend lint retains one pre-existing error in the A-07 account-date
-  picker expression and four pre-existing warnings.
-- Full backend suite: **INCONCLUSIVE**, not failed; it reached 62% and then
-  produced no failure output through the ten-minute timeout in the previously
-  observed slow region.
-- Headless responsive evidence captured and inspected for desktop, iPad
-  portrait, mobile enrollment/QR/manual key, mobile login challenge, invalid
-  code, and iPad reset/re-authentication screens.
-
-### A-08 status
-
-- **IMPLEMENTED:** YES — exact implementation HEAD recorded above.
-- **TESTED:** YES — focused and relevant broader validation recorded above;
-  full backend suite remains inconclusive.
-- **DEPLOYED:** NO.
-- **ACCEPTED-PROVEN LIVE:** NO.
-
-Outstanding acceptance items are independent exact-SHA security review, owner
-approval, merge, deployment, and trusted-HTTPS customer-device verification.
-No customer secret, MFA bypass, recovery token, credential, or deployment
+  https://github.com/ibettison/layMatchedBetting/pull/244#issuecomment-5…15246 tokens truncated…overy token, credential, or deployment
 material has been added to PAD.
 
 NEXT TASK: obtain a fresh independent exact-SHA security review of PR #251 at
@@ -1516,3 +1468,42 @@ other operational occurrences. Release workflow contracts: **11 passed**;
 installer suite: **61 passed**; shell syntax and `git diff --check`: **passed**.
 These changes are in PR #41 and remain unmerged; production approval remains
 **v0.1.1** and no candidate or AWS action was performed.
+
+#### Direct reset and approved identity reauthorization review (2026-09-23)
+
+PR #263's reset review finding reproduced in a fresh Python process that
+imports `app.reset_personal_state` without application startup or test
+`conftest.py`: the reset classifier unconditionally required three
+central-only tables (`campaign_funnel_events`,
+`interest_notification_outbox`, and `interest_request_idempotency`) even when
+those models were absent from `Base.metadata`. They are now optional known
+reference tables and are preserved/classified when present. A subprocess
+regression creates an isolated SQLite schema from customer models and runs the
+actual module `--dry-run` entry path without importing central models.
+
+PR #41's installer rerun review finding also reproduced from the existing
+configuration flow: reruns changed `APP_VERSION` and `REGISTRY_URL` in
+`.env.candidate`, while copying old pinned API/web refs and source SHA from
+`.env`; Compose could therefore start the old digests and later record the new
+version. A shared release-identity helper now clears old refs before reading
+authorization, accepts only a complete SHA/API digest/web digest tuple (or a
+fully empty legacy identity), atomically writes version, registry, refs and
+SHA together, pulls and checks both source labels before Compose starts, and
+persists the tuple only after the new services pass health/activation gates.
+The updater uses the same helper and checks. Existing RC staging digest refs
+remain accepted; RC installs still require a clean customer installation.
+
+The rerun regression starts from v0.1.1 with old API/web digests and SHA,
+applies a v0.2.0 approval identity, checks the candidate environment and fake
+Compose pull/up use the new exact digests, verifies label SHA, persists all
+five identity fields, then simulates a subsequent updater resume and verifies
+the same identity is used again. Partial metadata is also rejected and cannot
+leave old refs populated.
+
+Validation after these changes: complete application backend suite **491
+passed, 4 skipped** (one existing Alembic deprecation warning); direct reset
+regression included. Installer pytest suites **108 passed, 24 subtests**;
+installer unittest suite **65 passed**; candidate/promotion workflow contracts
+**11 passed**; Bash syntax and `git diff --check` passed. Production approval
+remains **v0.1.1**; no AWS access, merge, release dispatch, or approval change
+occurred.
