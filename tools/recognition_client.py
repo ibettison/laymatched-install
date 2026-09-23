@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -26,6 +27,11 @@ except ModuleNotFoundError:
 VERSION_CONFLICT_STATUS = 409
 TRANSIENT_HTTP_STATUSES = frozenset({408, 425, 429, *range(500, 600)})
 CENTRAL_RETRY_SECONDS = 60
+DNS_PROGRESS_INTERVAL_SECONDS = 30
+DNS_RETRY_COMPLETION_GRACE_SECONDS = 30
+DNS_RESERVATION_RENEWAL_SECONDS = 1800
+DNS_RENEWAL_REQUEST_SAFETY_SECONDS = 30
+DNS_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
 class RecognitionHTTPError(RuntimeError):
@@ -334,15 +340,144 @@ def _reservation_from_status(status: dict) -> dict:
         "status": {"ready": "dns_ready", "failed": "dns_failed"}.get(dns_status, "dns_pending"),
         "reservation_expires_at": status.get("reservation_expires_at"),
         "retry_after": (status.get("dns") or {}).get("retry_after"),
+        "version": status.get("version"),
+        "network_challenge": status.get("network_challenge"),
     }
+
+
+def _expiry_monotonic_deadline(value: str | None, *, monotonic_now: float, utc_now: dt.datetime | None = None) -> float | None:
+    if not value:
+        return None
+    try:
+        expiry = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if expiry.tzinfo is None:
+            return None
+        now_utc = utc_now or dt.datetime.now(dt.timezone.utc)
+        return monotonic_now + max(0.0, (expiry.astimezone(dt.timezone.utc) - now_utc).total_seconds())
+    except (TypeError, ValueError):
+        return None
+
+
+def _retry_after_seconds(reservation: dict) -> int | None:
+    try:
+        value = int(reservation.get("retry_after"))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+class DNSWaitSpinner:
+    """Small terminal-only heartbeat for the bounded customer DNS wait."""
+
+    def __init__(self, stream, *, started_at: float, interval: float = 0.1):
+        self.stream = stream
+        self.started_at = started_at
+        self.interval = interval
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = None
+        try:
+            self.enabled = bool(stream.isatty()) and all(
+                frame.encode(stream.encoding or "ascii") for frame in DNS_SPINNER_FRAMES
+            )
+        except (AttributeError, LookupError, UnicodeEncodeError, OSError):
+            self.enabled = False
+
+    @staticmethod
+    def render_frame(index: int, elapsed_seconds: float) -> str:
+        elapsed = max(0, int(elapsed_seconds))
+        return f"{DNS_SPINNER_FRAMES[index % len(DNS_SPINNER_FRAMES)]} Setting up your LayMatched address... {elapsed // 60:02d}:{elapsed % 60:02d} elapsed"
+
+    def _write_frame_locked(self, index: int | None = None):
+        elapsed = time.monotonic() - self.started_at
+        if index is None:
+            index = int(elapsed / self.interval)
+        self.stream.write("\r" + self.render_frame(index, elapsed))
+        self.stream.flush()
+
+    def _animate(self):
+        index = 0
+        while not self._stop.wait(self.interval):
+            with self._lock:
+                self._write_frame_locked(index)
+            index += 1
+
+    def start(self):
+        if self.enabled and self._thread is None:
+            self._thread = threading.Thread(target=self._animate, name="dns-wait-spinner", daemon=True)
+            self._thread.start()
+
+    def print_permanent(self, message: str):
+        if not self.enabled:
+            print(message, file=self.stream, flush=True)
+            return
+        with self._lock:
+            self.stream.write("\r\x1b[2K")
+            print(message, file=self.stream, flush=True)
+            self._write_frame_locked()
+
+    def stop(self):
+        if self._thread is None:
+            return
+        self._stop.set()
+        self._thread.join()
+        with self._lock:
+            self.stream.write("\r\x1b[2K")
+            self.stream.flush()
+        self._thread = None
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, _exception_type, _exception, _traceback):
+        self.stop()
+
+
+def _emit_dns_wait_progress(started_at: float, next_progress_at: float, reservation: dict,
+                            spinner: DNSWaitSpinner | None = None) -> float:
+    current = time.monotonic()
+    if current < next_progress_at:
+        return next_progress_at
+    elapsed = int(current - started_at)
+    message = f"[WAIT] Still waiting for DNS... {elapsed} seconds elapsed"
+    retry_after = _retry_after_seconds(reservation)
+    if reservation.get("status") == "dns_failed" and retry_after is not None:
+        message += f". Central has scheduled another DNS check in about {retry_after} seconds."
+    (spinner.print_permanent(message) if spinner else print(message, file=sys.stderr, flush=True))
+    intervals = (elapsed // DNS_PROGRESS_INTERVAL_SECONDS) + 1
+    return started_at + intervals * DNS_PROGRESS_INTERVAL_SECONDS
+
+
+def _dns_wait_timeout(reservation: dict, *, hard_bound: bool = False) -> RuntimeError:
+    if reservation.get("status") == "dns_failed" and _retry_after_seconds(reservation) is None:
+        return RuntimeError(
+            "customer DNS failed terminally; central reports no retry is scheduled. "
+            "The activation is preserved; contact LayMatched support with the hostname before retrying."
+        )
+    if hard_bound:
+        return RuntimeError(
+            "customer DNS is still being provisioned, but the next central retry cannot complete "
+            "within the safe reservation wait limit. The activation is preserved; rerun install.sh "
+            "later to resume safely."
+        )
+    return RuntimeError(
+        "customer DNS is still pending and central has not reported a retry that can complete "
+        "within the initial wait limit. The activation is preserved; rerun install.sh later to resume safely."
+    )
 
 
 def reserve_hostname(args) -> int:
     directory = Path(args.state_dir)
     state = json.loads((directory / "state.json").read_text())
-    deadline = time.monotonic() + max(1, args.wait_seconds)
-    session = _ensure_session(args, directory, _session(directory), retry_deadline=deadline)
-    activation_status = _status(args, directory, session, retry_deadline=deadline)
+    started_at = time.monotonic()
+    soft_deadline = started_at + max(1, args.wait_seconds)
+    next_progress_at = started_at + DNS_PROGRESS_INTERVAL_SECONDS
+    print("[INFO] Waiting for your LayMatched hostname/DNS to become ready...", file=sys.stderr, flush=True)
+    print("[INFO] This can take several minutes. The installer is still running — please do not close this window.", file=sys.stderr, flush=True)
+
+    session = _ensure_session(args, directory, _session(directory), retry_deadline=soft_deadline)
+    activation_status = _status(args, directory, session, retry_deadline=soft_deadline)
     resuming_reservation = bool(activation_status.get("reservation_id"))
     if resuming_reservation:
         if activation_status.get("nickname") != args.nickname or activation_status.get("hostname") != f"{args.nickname}.matched.laysports.co.uk":
@@ -354,7 +489,7 @@ def reserve_hostname(args) -> int:
         availability_path = f"/v1/activations/{session['activation_id']}/nickname-availability"
         availability, session = _request_authenticated(
             args, directory, session, method="POST", path=availability_path, body=availability_body,
-            operation="nickname availability", retry_deadline=deadline,
+            operation="nickname availability", retry_deadline=soft_deadline,
         )
         if not availability.get("available"):
             raise RuntimeError("nickname is unavailable")
@@ -362,11 +497,10 @@ def reserve_hostname(args) -> int:
         reservation_path = f"/v1/activations/{session['activation_id']}/nickname-reservations"
         reservation, session = _request_authenticated(
             args, directory, session, method="POST", path=reservation_path, body=reservation_body,
-            operation="nickname reservation", retry_deadline=deadline,
+            operation="nickname reservation", retry_deadline=soft_deadline,
         )
     if reservation.get("nickname") != args.nickname or reservation.get("hostname") != f"{args.nickname}.matched.laysports.co.uk":
         raise RuntimeError("central recognition returned a hostname reservation that does not match the requested nickname")
-    _write_hostname(directory, reservation)
     challenge = reservation.get("network_challenge")
     if not challenge and not resuming_reservation:
         raise RuntimeError("central recognition did not issue a network challenge")
@@ -374,38 +508,119 @@ def reserve_hostname(args) -> int:
         _write_challenge(Path(args.challenge_root), "network", challenge)
         network_body = {"public_ipv4": args.public_ipv4, "public_ipv6": None, "challenge_response": challenge}
         network_path = f"/v1/activations/{session['activation_id']}/network"
-        current_status = _status(args, directory, session, retry_deadline=deadline)
+        current_status = activation_status if resuming_reservation else _status(
+            args, directory, session, retry_deadline=soft_deadline
+        )
         _, session = _request_authenticated(
             args, directory, session, method="PUT", path=network_path, body=network_body,
-            operation="public-IP challenge verification", retry_deadline=deadline,
+            operation="public-IP challenge verification", retry_deadline=soft_deadline,
             extra_headers={"If-Match": f'"{current_status.get("version", session.get("version", 1))}"'},
         )
-    next_renewal = time.monotonic() + 600
-    while reservation.get("status") != "dns_ready":
-        dns_failed = reservation.get("status") == "dns_failed"
-        if dns_failed and reservation.get("retry_after") is None:
-            raise RuntimeError("customer DNS failed terminally; inspect central activation status")
-        if time.monotonic() >= deadline:
-            raise RuntimeError("customer DNS did not become ready during the bounded retry window")
-        if time.monotonic() >= next_renewal:
-            current_status = _status(args, directory, session, retry_deadline=deadline)
-            renew_body = {"requested_extension_seconds": 900}
-            renew_path = f"/v1/activations/{session['activation_id']}/nickname-reservations/{reservation['reservation_id']}/renew"
-            _, session = _request_authenticated(
-                args, directory, session, method="POST", path=renew_path, body=renew_body,
-                operation="nickname reservation renewal", retry_deadline=deadline,
-                extra_headers={"If-Match": f'"{current_status.get("version", session.get("version", 1))}"'},
-            )
-            next_renewal = time.monotonic() + 600
-        delay = max(1, min(int(reservation.get("retry_after") or 5), 30))
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise RuntimeError("customer DNS did not become ready during the bounded retry window")
-        time.sleep(min(delay, remaining))
-        reservation = _reservation_from_status(_status(args, directory, session, retry_deadline=deadline))
-        _write_hostname(directory, reservation)
-    print(json.dumps(reservation, sort_keys=True))
-    return 0
+        activation_status = _status(args, directory, session, retry_deadline=soft_deadline)
+
+    if activation_status.get("reservation_id"):
+        reservation = _reservation_from_status(activation_status)
+    _write_hostname(directory, reservation)
+    if reservation.get("status") == "dns_ready":
+        print(json.dumps(reservation, sort_keys=True))
+        return 0
+
+    now = time.monotonic()
+    lease_deadline = _expiry_monotonic_deadline(
+        reservation.get("reservation_expires_at"), monotonic_now=now
+    )
+    # The central API grants a 15-minute lease; renewal replaces expiry with
+    # request-time + up to 30 minutes. Allow one renewal horizon, reserving
+    # 30 seconds for the renewal request and 30 seconds for worker completion.
+    hard_deadline = soft_deadline if lease_deadline is None else (
+        lease_deadline + DNS_RESERVATION_RENEWAL_SECONDS
+        - DNS_RETRY_COMPLETION_GRACE_SECONDS - DNS_RENEWAL_REQUEST_SAFETY_SECONDS
+    )
+    effective_deadline = soft_deadline
+    retry_extended_wait = False
+
+    with DNSWaitSpinner(sys.stderr, started_at=started_at) as spinner:
+        while True:
+            if reservation.get("status") == "dns_ready":
+                print(json.dumps(reservation, sort_keys=True))
+                return 0
+            if reservation.get("status") == "dns_failed" and _retry_after_seconds(reservation) is None:
+                raise _dns_wait_timeout(reservation)
+
+            now = time.monotonic()
+            retry_after = _retry_after_seconds(reservation)
+            retry_due = now + retry_after if retry_after is not None else None
+            renewal_at = None
+            if retry_due is not None:
+                retry_completion_deadline = retry_due + DNS_RETRY_COMPLETION_GRACE_SECONDS
+                if retry_completion_deadline > hard_deadline:
+                    raise _dns_wait_timeout(reservation, hard_bound=True)
+                effective_deadline = max(effective_deadline, retry_completion_deadline)
+                retry_extended_wait = retry_extended_wait or retry_completion_deadline > soft_deadline
+
+                lease_deadline = _expiry_monotonic_deadline(
+                    reservation.get("reservation_expires_at"), monotonic_now=now
+                )
+                if lease_deadline is None:
+                    effective_deadline = min(effective_deadline, soft_deadline)
+                elif retry_completion_deadline > lease_deadline:
+                    renewal_at = max(
+                        now,
+                        retry_completion_deadline - DNS_RESERVATION_RENEWAL_SECONDS
+                        - DNS_RENEWAL_REQUEST_SAFETY_SECONDS,
+                    )
+                    if renewal_at + DNS_RENEWAL_REQUEST_SAFETY_SECONDS >= lease_deadline:
+                        raise _dns_wait_timeout(reservation, hard_bound=True)
+
+            if now >= effective_deadline:
+                raise _dns_wait_timeout(reservation, hard_bound=retry_extended_wait)
+
+            next_progress_at = _emit_dns_wait_progress(started_at, next_progress_at, reservation, spinner)
+
+            if renewal_at is not None and now >= renewal_at:
+                renew_path = (
+                    f"/v1/activations/{session['activation_id']}/nickname-reservations/"
+                    f"{reservation['reservation_id']}/renew"
+                )
+                requested_extension = min(
+                    DNS_RESERVATION_RENEWAL_SECONDS,
+                    max(300, int(hard_deadline - now)),
+                )
+                renewed, session = _request_authenticated(
+                    args, directory, session, method="POST", path=renew_path,
+                    body={"requested_extension_seconds": requested_extension},
+                    operation="nickname reservation renewal", retry_deadline=effective_deadline,
+                    extra_headers={"If-Match": f'"{activation_status.get("version", session.get("version", 1))}"'},
+                )
+                renewed_expiry = _expiry_monotonic_deadline(
+                    renewed.get("reservation_expires_at"), monotonic_now=time.monotonic()
+                )
+                if renewed_expiry is None or renewed_expiry <= retry_completion_deadline:
+                    raise RuntimeError(
+                        "central could not safely renew the hostname reservation through its scheduled DNS retry. "
+                        "The activation is preserved; rerun install.sh later to resume safely."
+                    )
+                reservation["reservation_expires_at"] = renewed["reservation_expires_at"]
+                activation_status = _status(args, directory, session, retry_deadline=effective_deadline)
+                reservation = _reservation_from_status(activation_status)
+                _write_hostname(directory, reservation)
+                continue
+
+            remaining = effective_deadline - now
+            if remaining <= 0:
+                raise _dns_wait_timeout(reservation, hard_bound=retry_extended_wait)
+            wait_for = min(DNS_PROGRESS_INTERVAL_SECONDS, remaining)
+            if retry_after is not None:
+                wait_for = min(wait_for, max(1, retry_after))
+            if renewal_at is not None:
+                wait_for = min(wait_for, max(0.1, renewal_at - now))
+            time.sleep(max(0.1, wait_for))
+
+            # Emit any due heartbeat before the potentially slow/retrying HTTP call.
+            next_progress_at = _emit_dns_wait_progress(started_at, next_progress_at, reservation, spinner)
+            activation_status = _status(args, directory, session, retry_deadline=effective_deadline)
+            reservation = _reservation_from_status(activation_status)
+            _write_hostname(directory, reservation)
 
 
 def report_https(args) -> int:
