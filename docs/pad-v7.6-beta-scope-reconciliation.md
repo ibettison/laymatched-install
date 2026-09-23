@@ -1,4 +1,4 @@
-Warning: truncated output (original token count: 34630)
+Warning: truncated output (original token count: 34638)
 Total output lines: 2790
 
 # LAYMATCHED — PAD v7.6 Beta-Scope Reconciliation
@@ -730,7 +730,7 @@ Independent review status:
   that the standard command runs both profiles. It initially requested exact
   final-HEAD validation evidence; that evidence was subsequently rerun on the
   clean final HEAD and attached to PR #244:
-  https://github.com/ibettison/layMatchedBetting/pull/244#issuecomment-5…14630 tokens truncated…led until code verification succeeds. Ten recovery codes
+  https://github.com/ibettison/layMatchedBetting/pull/244#issuecomment-5…14638 tokens truncated…eeds. Ten recovery codes
   are generated securely, shown once, and stored only as salted PBKDF2 hashes.
 - MFA authentication epochs invalidate prior sessions after enrollment/reset;
   protected API middleware checks the epoch and second-factor claim server-side.
@@ -1501,10 +1501,10 @@ promotion workflow be dispatched with those same digests and the AWS evidence.
 #### Repository identity review (2026-09-23)
 
 Independent review confirmed an owner spelling defect in PR #41's candidate
-workflow: the application checkout and both OCI source labels named
-`ibettisson/layMatchedBetting`; the authoritative identity is
-`ibettison/layMatchedBetting`. The existing workflow contract test repeated
-the incorrect expected checkout repository. A historical PR #252 evidence
+workflow: the application checkout and both OCI source labels named the
+application repository with an extra `s` in its owner name; the authoritative
+identity is `ibettison/layMatchedBetting`. The existing workflow contract test
+repeated the incorrect expected checkout repository. A historical PR #252 evidence
 link in this PAD also used the misspelled owner. The canonical and deployment
 workflow copies now share one `APPLICATION_REPOSITORY` value; checkout, both
 image source labels, and candidate manifest metadata use that identity. The
