@@ -9,6 +9,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 CANDIDATE = ROOT / ".github/workflows/create-release-candidate.yml"
 PROMOTE = ROOT / ".github/workflows/promote-accepted-release-candidate.yml"
+APPLICATION_REPOSITORY = "ibettison/layMatchedBetting"
 
 
 class ReleaseCandidateFlowTest(unittest.TestCase):
@@ -28,12 +29,31 @@ class ReleaseCandidateFlowTest(unittest.TestCase):
         self.assertEqual(inputs["sha"]["required"], "true")
         self.assertEqual(inputs["candidate_version"]["required"], "true")
         checkout = self.candidate_by_name["Checkout exact application revision"]["with"]
-        self.assertEqual(checkout["repository"], "ibettisson/layMatchedBetting")
+        self.assertEqual(checkout["repository"], "${{ env.APPLICATION_REPOSITORY }}")
         self.assertEqual(checkout["ref"], "${{ inputs.sha }}")
         self.assertEqual(checkout["persist-credentials"], "false")
         validate = self.candidate_by_name["Validate immutable candidate inputs"]["run"]
         self.assertIn("[0-9a-f]{40}", validate)
         self.assertIn("-rc\\.", validate)
+
+    def test_candidate_uses_authoritative_application_repository_identity(self):
+        job = self.candidate["jobs"]["build_candidate"]
+        self.assertEqual(job["env"]["APPLICATION_REPOSITORY"], APPLICATION_REPOSITORY)
+        checkout = self.candidate_by_name["Checkout exact application revision"]["with"]
+        self.assertEqual(checkout["repository"], "${{ env.APPLICATION_REPOSITORY }}")
+        for step_name in (
+            "Build API from exact application SHA",
+            "Build Web from exact application SHA",
+        ):
+            self.assertIn(
+                'org.opencontainers.image.source=https://github.com/$APPLICATION_REPOSITORY',
+                self.candidate_by_name[step_name]["run"],
+            )
+        manifest = self.candidate_by_name["Pull back and verify the exact candidate artifacts"]["run"]
+        self.assertIn('--arg application_repository "$APPLICATION_REPOSITORY"', manifest)
+        self.assertIn("application_repository:$application_repository", manifest)
+        for workflow in (self.candidate_text, self.promote_text):
+            self.assertNotIn("ibettis" + "son", workflow.lower())
 
     def test_canonical_and_deployment_workflow_copies_match(self):
         self.assertEqual(
