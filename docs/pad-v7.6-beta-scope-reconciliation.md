@@ -2874,3 +2874,214 @@ threads remain open but are satisfied by these fixes and tests; they are not
 new release scope. Production approval remains **v0.1.1**. No merge, release
 workflow dispatch, candidate creation, AWS access, or production change was
 performed.
+
+## 46. Product Experience & Connected Architecture — agreed direction (2026-09-24)
+
+This section records the Owner's agreed product direction so that the application,
+central services, Founding 100 collaboration, recognition, monitoring, and Owner
+Portal are designed as one LayMatched system. It is an architecture and product
+experience decision, not authority to interrupt the current installation/MFA
+release gate or to begin implementation without the normal review process.
+
+### One product journey
+
+LayMatched must feel like one coherent product from:
+
+`Website → Installation → Welcome/Login/MFA → Customer App → Community → Owner Portal`.
+
+The customer application is not a collection of calculators. It is a guided
+matched-betting working environment whose Dashboard answers three questions:
+
+1. What should I do now?
+2. What offers have I got underway?
+3. How am I doing?
+
+The same product serves both PAD audiences: new customers who need guidance and
+experienced matched bettors who need organisation. Complexity should reveal
+itself progressively rather than through a separate expert mode.
+
+### Customer application information architecture
+
+The agreed primary customer navigation direction is a space-efficient top
+navigation rather than a permanent left sidebar. The working information
+architecture is:
+
+- Dashboard
+- Offer Finder
+- My Offers
+- My Money
+- Calculators
+- Community
+- Profile
+
+Bookmaker/exchange account and balance management should be integrated naturally
+with the money/account experience rather than consuming unnecessary permanent
+navigation space where this improves tablet usability.
+
+The Dashboard is deliberately restrained. It surfaces only the highest-priority
+actions, a concise view of active offers, and quiet progress information.
+Detailed workflow belongs in My Offers; financial truth belongs in My Money;
+offer discovery belongs in Offer Finder. A first-login Dashboard should avoid
+empty tables and zero-value noise and instead guide the member through setting
+up money/accounts, finding a first offer, and following it through.
+
+### Unified visual identity
+
+The legacy green-and-cream application treatment is to be retired. The agreed
+application direction is light, welcoming and professional: subtle blues,
+white cards, generous whitespace, navy text, and stronger electric blue for
+primary actions and active states. Dark/navy brand treatment may be concentrated
+in a shallow hero/banner and selected brand elements; the application as a whole
+must not become a dark theme.
+
+The design system must cover typography, backgrounds, cards, borders, buttons,
+navigation, icons, spacing, status colours, forms, tables, calculators, empty
+states, financial information, and responsive desktop/tablet/mobile behaviour.
+Tablet fit is an explicit acceptance concern.
+
+Use the actual LayMatched website visual language and recognition artwork rather
+than invented substitutes. Do not introduce greyhound imagery into the
+application identity.
+
+### Privacy boundary — “Central collaboration, private betting”
+
+This is an architectural invariant.
+
+**Private customer VPS**
+
+The following remain private to the customer's installation and must not become
+Owner Portal or central collaboration data:
+
+- bets and selections;
+- bookmaker/exchange balances;
+- liabilities and committed stakes;
+- offer activity and matched-betting workflow detail;
+- profits, returns, and personal matched-betting financial records;
+- bookmaker-specific customer activity and credentials.
+
+**Central LayMatched services**
+
+Central services may hold the minimum shared/operational information required
+for the LayMatched service, including:
+
+- installation/activation identity and lifecycle;
+- installation health/check-in state;
+- application version and update state;
+- onboarding and MFA completion state;
+- actionable operational/error state needed to support the installation;
+- Founding Member identity;
+- Community discussions, replies, suggestions, support/interest and submitted
+  discussion attachments;
+- Owner responses and discussion/work status;
+- recognition/achievement records.
+
+Central services enhance and support the private customer application. Loss of
+central collaboration/recognition availability should not unnecessarily make
+ordinary local matched-betting functionality unusable.
+
+### Installation and ongoing monitoring
+
+Installation monitoring already forms part of the activation lifecycle and
+must remain connected to Owner operations. The operational model should continue
+beyond installation with privacy-preserving customer-installation check-ins.
+
+The Owner Portal should be able to identify, without exposing private betting
+data:
+
+- installation/activation state;
+- onboarding/MFA completion;
+- last successful check-in / apparent installation health;
+- installed application version and whether an update is available;
+- relevant operational errors requiring Owner attention.
+
+The customer application should expose a quiet service-status indication where
+appropriate (for example connected/current version/last check) rather than
+frightening users with intrusive monitoring language.
+
+### Founding 100 Community and collaboration
+
+Community is a product pillar, not a generic forum or social-media clone. It is
+centred on improving LayMatched and helping Founding Members work with the
+Owner and each other.
+
+A member must be able to raise an idea, report something that is not working
+well, ask a question, share a useful tip, or request discussion with Ian.
+Other Founding Members may contribute where appropriate. Community content is
+stored centrally and rendered natively inside the customer application so that
+members on separate private VPS installations participate in the same shared
+collaboration space.
+
+The intended improvement loop is:
+
+`Member raises something → Founders discuss → Ian responds → Under consideration → Planned → Being worked on → Added to LayMatched`.
+
+Members should be able to see the status of things they raise. The experience
+must use natural product language and must not feel like an IT ticketing system.
+
+The Dashboard should contain only a small Community indicator when useful; the
+full discussion experience belongs in Community.
+
+### Recognition and Profile
+
+Recognition is centrally stored so that it follows the Founding Member rather
+than being trapped on one VPS. The Dashboard carries only a restrained
+recognition/profile indicator; Profile is the proper home for the member's
+recognition collection and account/security/preferences.
+
+The established recognition identities are:
+
+- Pioneer — original Founding 100 identity;
+- Improver — meaningful contribution that improves the product;
+- Insighter — valuable experience, thinking, or use-case contribution;
+- Champion — repeated meaningful contribution/help.
+
+Recognition is not driven by post counts or engagement gaming. Awards are made
+for meaningful contribution.
+
+**Founding Patron is exceptional and unique to the Owner's friend. It is not
+part of the normal recognition progression, is not attainable by other members,
+and must never be displayed to ordinary members as a locked or future award.**
+
+### Owner Portal connection
+
+The Owner Portal is the operating view over central LayMatched information, not
+a window into customers' private matched-betting records.
+
+In addition to installation/customer operational monitoring, it should provide
+a Founding 100 collaboration inbox showing, as appropriate:
+
+- new ideas/issues/discussions;
+- conversations awaiting an Owner response;
+- suggestions attracting useful member support;
+- items moving through consideration/planning/delivery;
+- contributions that may merit recognition.
+
+The Owner should be able to respond, update the collaboration status, connect a
+discussion to a planned/delivered LayMatched improvement, and administer
+recognition. When an improvement ships, the originating collaboration can show
+that it was added to LayMatched and, where appropriate, in which version.
+
+This creates a closed product-learning loop:
+
+`Customer App ↔ Central Collaboration/Recognition/Monitoring ↔ Owner Portal`
+
+while preserving the one-way privacy boundary around customer betting and money
+data.
+
+### Implementation and release boundary
+
+This section records agreed architecture and product direction. It does **not**
+supersede the current release process or authorise implementation ahead of the
+remaining installation/MFA acceptance gate.
+
+Current order remains:
+
+`Finish installer/MFA acceptance → lock/reconcile customer journey and design
+system → implement the core customer experience consistently → Profile and
+recognition → central Community/collaboration → Owner Portal integration →
+Founder #001 rehearsal → Founding Beta`.
+
+Where implementation reveals a necessary contract change between the customer
+VPS, central services, and Owner Portal, that contract must preserve the privacy
+boundary above and be reviewed before implementation.
+
