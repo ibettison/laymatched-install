@@ -3038,6 +3038,28 @@ The established recognition identities are:
 Recognition is not driven by post counts or engagement gaming. Awards are made
 for meaningful contribution.
 
+Earned recognition must also be visible **within Community collaboration**, not
+confined to Profile. A member's earned shields form part of their Community
+identity and should be displayed in a restrained way alongside their name on
+discussions and replies. This lets other Founding Members see that useful
+contributions are noticed and valued.
+
+When a contribution directly results in recognition, LayMatched should be able
+to acknowledge that within Community and, where appropriate, associate the
+award with the contribution that earned it. Profile remains the member's full
+recognition history, including useful context such as why an award was made and
+a link back to the relevant Community contribution when appropriate.
+
+The intended recognition incentive loop is:
+
+`Contribute useful information or insight → Founders discuss → LayMatched
+benefits → meaningful contribution is acknowledged → earned recognition is
+visible in Community → further useful contribution is encouraged`.
+
+This visibility is intended to encourage quality participation, not competition
+for activity. Posting frequency, reactions, or raw engagement must never by
+themselves qualify a member for a shield.
+
 **Founding Patron is exceptional and unique to the Owner's friend. It is not
 part of the normal recognition progression, is not attainable by other members,
 and must never be displayed to ordinary members as a locked or future award.**
