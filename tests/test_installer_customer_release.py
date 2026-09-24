@@ -79,13 +79,25 @@ def test_root_route_is_verified_before_profile_or_mfa_onboarding() -> None:
     route_check = installer.index("verify_customer_login_route", report_https)
     completion = installer.index("complete_central_activation", route_check)
     assert report_https < route_check < completion
-    assert 'Open https://${CUSTOMER_HOSTNAME}/, sign in, and complete Authenticator protection.' in installer
+    assert "ONE LAST STEP" in installer
+    assert "Waiting for account security..." in installer
+    assert "ACCOUNT SECURED" in installer
     function = _login_route_function()
     assert 'https://${CUSTOMER_HOSTNAME}/' in function
     assert "--resolve \"${CUSTOMER_HOSTNAME}:443:127.0.0.1\"" in function
     assert "<div id=\"root\"></div>" in function
     # The check only reads the route; it cannot rewrite activation state or certs.
     assert not any(command in function for command in ("rm ", "mv ", "sed ", "certbot ", "advance_activation_to"))
+
+
+def test_customer_completion_is_gated_by_verified_state_and_keeps_support_summary() -> None:
+    installer = (ROOT / "install.sh").read_text()
+    assert 'if [ "$HEALTHY" = "true" ] && [ "$INSTALLATION_HTTPS_VERIFIED" = "true" ]' in installer
+    assert '[ "$INSTALLATION_ACTIVATION_VERIFIED" = "true" ] && [ "$RECOGNITION_SCHEDULER_ENABLED" = "true" ]' in installer
+    assert "WELCOME TO LAYMATCHED" in installer
+    assert "installation-support.txt" in installer
+    assert "Persistent volumes: postgres_data, bookmaker_icon_cache" in installer
+    assert "Private configuration: /opt/laymatched/.env (contains secrets; do not share)" in installer
 
 
 def test_failed_root_check_preserves_activation_session_and_existing_certificate(tmp_path: Path) -> None:

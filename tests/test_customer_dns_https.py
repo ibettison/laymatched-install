@@ -45,7 +45,12 @@ def test_fresh_install_prepares_challenge_listener_before_central_network_update
     installer = (ROOT / "install.sh").read_text()
     prepare = installer.index("--network-only")
     central_network = installer.index("reserve-hostname")
+    certbot_install = installer.index("Installing Certbot for customer HTTPS")
+    compose_install = installer.index("# -- Phase 7: Pull and start services")
     assert prepare < central_network
+    assert central_network < certbot_install < compose_install
+    assert "--begin-only" in installer
+    assert "Waiting for central DNS verification before requesting HTTPS." in installer
 
 
 def test_network_only_listener_exposes_only_the_bound_challenge_route(tmp_path: Path) -> None:
@@ -73,6 +78,7 @@ def test_network_only_listener_exposes_only_the_bound_challenge_route(tmp_path: 
         env=environment, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stderr
+    assert "\x1b" not in result.stdout + result.stderr
     config = (nginx_root / "sites-available" / "laymatched").read_text()
     assert "location ^~ /.well-known/laymatched-network/" in config
     assert "try_files $uri =404;" in config

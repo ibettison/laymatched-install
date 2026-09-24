@@ -8,8 +8,21 @@ set -euo pipefail
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
-log_info() { printf '%b[INFO]%b %s\n' "$GREEN" "$NC" "$1"; }
-fail() { printf '%b[ERROR]%b %s\n' "$RED" "$NC" "$1" >&2; exit 1; }
+log_info() {
+    if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
+        printf '%b[INFO]%b %s\n' "$GREEN" "$NC" "$1"
+    else
+        printf '[INFO] %s\n' "$1"
+    fi
+}
+fail() {
+    if [ -t 2 ] && [ "${TERM:-dumb}" != "dumb" ]; then
+        printf '%b[ERROR]%b %s\n' "$RED" "$NC" "$1" >&2
+    else
+        printf '[ERROR] %s\n' "$1" >&2
+    fi
+    exit 1
+}
 
 network_only=0
 if [ "${1:-}" = "--network-only" ]; then
