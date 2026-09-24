@@ -8,7 +8,6 @@ import base64
 import datetime as dt
 import json
 import os
-import re
 import subprocess
 import sys
 import threading
@@ -27,6 +26,27 @@ except ModuleNotFoundError:
 VERSION_CONFLICT_STATUS = 409
 TRANSIENT_HTTP_STATUSES = frozenset({408, 425, 429, *range(500, 600)})
 CENTRAL_RETRY_SECONDS = 60
+# Stable error identifiers emitted by the central activation API's
+# authenticated/signed routes. Keep this allowlist in step with that API;
+# arbitrary response header text must never reach operator diagnostics.
+ACTIVATION_ERROR_CODES = frozenset({
+    "activation_deactivated",
+    "activation_incomplete",
+    "conflict",
+    "dns_pending",
+    "https_failed",
+    "idempotency_conflict",
+    "invalid_credential",
+    "invalid_signature",
+    "licence_inactive",
+    "nickname_invalid",
+    "nickname_reserved",
+    "nickname_unavailable",
+    "not_found",
+    "replay_detected",
+    "validation_failed",
+    "version_conflict",
+})
 DNS_PROGRESS_INTERVAL_SECONDS = 30
 DNS_RETRY_COMPLETION_GRACE_SECONDS = 30
 DNS_RESERVATION_RENEWAL_SECONDS = 1800
@@ -35,10 +55,23 @@ DNS_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
 class RecognitionHTTPError(RuntimeError):
-    def __init__(self, status: int):
+    def __init__(self, status: int, activation_error: str | None = None):
         detail = "; fetch current activation status before retrying" if status == VERSION_CONFLICT_STATUS else ""
-        super().__init__(f"central recognition request failed with HTTP {status}{detail}")
+        classification = f" ({activation_error})" if activation_error else ""
+        super().__init__(f"central recognition request failed with HTTP {status}{classification}{detail}")
         self.status = status
+        self.activation_error = activation_error
+
+
+def _safe_activation_error(value: str | None) -> str | None:
+    return value if value in ACTIVATION_ERROR_CODES else None
+
+
+def _http_error(error: urllib.error.HTTPError) -> RecognitionHTTPError:
+    # Keep only the server's bounded classification. Never inspect its body or
+    # copy request details into an error shown to the installer operator.
+    classification = _safe_activation_error(error.headers.get("X-Activation-Error") if error.headers else None)
+    return RecognitionHTTPError(error.code, classification)
 
 
 def _is_transient_error(error: BaseException) -> bool:
@@ -58,6 +91,8 @@ def _call_with_retries(operation: str, call, *, deadline: float):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 category = f"HTTP {error.status}" if isinstance(error, RecognitionHTTPError) else "connection failure"
+                if isinstance(error, RecognitionHTTPError) and error.activation_error:
+                    category += f" ({error.activation_error})"
                 raise RuntimeError(
                     f"{operation} remained unavailable during the bounded retry window ({category})"
                 ) from error
@@ -77,7 +112,7 @@ def _post(url: str, body: dict, headers: dict[str, str], timeout: int = 15) -> d
         with urllib.request.urlopen(request, timeout=timeout) as response:
             value = json.loads(response.read())
     except urllib.error.HTTPError as error:
-        raise RecognitionHTTPError(error.code) from error
+        raise _http_error(error) from None
     if not isinstance(value, dict):
         raise RuntimeError("central recognition returned an invalid response")
     return value
@@ -89,7 +124,7 @@ def _get(url: str, headers: dict[str, str], timeout: int = 15) -> dict:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             value = json.loads(response.read())
     except urllib.error.HTTPError as error:
-        raise RecognitionHTTPError(error.code) from error
+        raise _http_error(error) from None
     if not isinstance(value, dict):
         raise RuntimeError("central activation returned an invalid response")
     return value
@@ -102,7 +137,7 @@ def _put(url: str, body: dict, headers: dict[str, str], timeout: int = 15) -> di
         with urllib.request.urlopen(request, timeout=timeout) as response:
             value = json.loads(response.read())
     except urllib.error.HTTPError as error:
-        raise RecognitionHTTPError(error.code) from error
+        raise _http_error(error) from None
     if not isinstance(value, dict):
         raise RuntimeError("central recognition returned an invalid response")
     return value
@@ -115,7 +150,7 @@ def _patch(url: str, body: dict, headers: dict[str, str], timeout: int = 15) -> 
         with urllib.request.urlopen(request, timeout=timeout) as response:
             value = json.loads(response.read())
     except urllib.error.HTTPError as error:
-        raise RecognitionHTTPError(error.code) from error
+        raise _http_error(error) from None
     if not isinstance(value, dict):
         raise RuntimeError("central recognition returned an invalid response")
     return value
