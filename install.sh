@@ -718,7 +718,13 @@ if [ -f /opt/laymatched/.env ]; then
 fi
 
 if [ -n "$RELEASE_CANDIDATE_MANIFEST" ] && [ "$CONFIG_ALREADY_PROVIDED" = "true" ]; then
-    log_error "Release candidate installation requires a clean customer installation."
+    if ! python3 "$SCRIPT_DIR/tools/release_candidate_resume.py" \
+        "$RELEASE_CANDIDATE_MANIFEST" "/opt/laymatched/release-candidate.json" \
+        /opt/laymatched/.env "$INSTALLATION_ID_FILE" "$ACTIVATION_STATE_DIR/state.json" \
+        "$ACTIVATION_STATE_DIR/session.json"; then
+        log_error "Release candidate installation requires a clean customer installation or a provable same-candidate MFA-handoff resume."
+    fi
+    log_info "Verified interrupted Release Candidate installation; resuming at the MFA handoff."
 fi
 
 if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
@@ -842,6 +848,13 @@ else
     APP_VERSION="${APPROVED_VERSION}"
     # Candidate registry URL - will be persisted only after health checks pass
     CANDIDATE_REGISTRY_URL="${REGISTRY_URL}"
+    if [ -n "$RELEASE_CANDIDATE_MANIFEST" ]; then
+        if [ "$CANDIDATE_REGISTRY_URL" != "$ORIGINAL_REGISTRY_URL" ] || \
+            ! read_release_candidate_manifest "$RELEASE_CANDIDATE_MANIFEST" "$CANDIDATE_REGISTRY_URL"; then
+            log_error "Release candidate identity or registry does not match the interrupted installation."
+        fi
+        APP_VERSION="$RELEASE_CANDIDATE_VERSION"
+    fi
     log_info "Using existing configuration from /opt/laymatched/.env. Approved version: ${APP_VERSION}"
 
     # -- Prepare candidate .env for rerun deployment -----------------------
