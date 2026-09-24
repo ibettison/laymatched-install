@@ -3495,6 +3495,88 @@ exercise. Fix genuine blockers only and freeze the build.
 
 No late speculative feature work should be introduced after the freeze.
 
+### Two-profile demonstration installation strategy
+
+For the Wednesday demonstration, LayMatched should support two controlled
+installation profiles built from the **same application code and normal data
+model**. This is not permission to fork the application into a separate demo
+product.
+
+**Standard installation — clean/new customer**
+
+The AWS acceptance/demo VPS represents a genuinely new customer. It should begin
+with clean customer state and demonstrate:
+
+`First login → Welcome/Getting Started → add bookmakers and exchanges → enter
+starting balances → Dashboard begins to become useful → review Offer Finder →
+start the first offer`.
+
+This proves the day-one customer experience without fabricated mature-account
+state.
+
+**Demonstration installation — established customer**
+
+The existing Fasthosts demo VPS represents a customer who has been using
+LayMatched for some time. It may be populated with a deterministic demonstration
+dataset using the same normal application entities and lifecycle rules.
+
+The demonstration dataset should contain enough realistic state to show the
+Dashboard doing useful work, including:
+
+- several bookmaker and exchange accounts with believable example balances;
+- multiple offers at deliberately different lifecycle stages;
+- offers that need attention and offers that are waiting for an external event
+  or settlement;
+- useful timing/deadline/next-action notifications;
+- completed offer history; and
+- accumulated example profit so the journey visibly ends with profit in the pot.
+
+Where practical, clicking a Dashboard item must open the corresponding real
+My Offers record at the correct lifecycle stage. Demo records must not be
+implemented as decorative Dashboard-only mocks.
+
+A deterministic **reset demonstration data** facility is desirable so the Owner
+can rehearse, progress or complete offers and restore the canonical demo state
+before another demonstration. It should be owner/development controlled rather
+than an ordinary production-customer switch.
+
+Demo data must remain clearly distinguishable from genuine customer financial
+activity and must not contaminate real customer records, balances or reporting.
+The preferred implementation is one application plus a controlled seed/reset
+facility, not widespread `if demo` branches through the frontend or backend.
+
+This demonstration capability is now part of the Wednesday demo-critical path
+because it allows the product to demonstrate both ends of the customer journey:
+
+`AWS: Day 1 customer → Fasthosts: established customer with multiple live
+offers, reminders, history and profit`.
+
+For Wednesday, this has higher priority than expanding Community, recognition
+or Owner Portal depth.
+
+### Demo-critical customer story and priority cut line
+
+The primary Wednesday story is now deliberately narrower than the original
+Jobs 1–14 expansion:
+
+`First login → Dashboard → My Money → add bookmakers/exchanges and balances →
+Offer Finder → Start Offer → guided offer lifecycle → My Offers/Dashboard
+tracking → settlement → profit`.
+
+The established Fasthosts demo installation then shows what the same application
+looks like when several offers coexist at different stages and LayMatched is
+remembering deadlines, next actions and history for the customer.
+
+This customer story, together with the product shell and professional
+presentation, is the **must-work** scope. Profile, Community, recognition and
+Owner Portal are cherry-on-top for Wednesday: implement a credible working slice
+or professional talk-around surface only when the primary customer journey is
+secure.
+
+The customer-facing value to demonstrate is that LayMatched saves the customer
+time, removes manual administration and makes it quicker and clearer to progress
+matched-betting offers toward realised profit.
+
 ### Sprint schedule
 
 **Friday morning — installer closure**
@@ -3508,17 +3590,23 @@ Concentrate on Jobs 2–4: product shell/design system, login/first arrival and
 Dashboard. The application should already look materially more like the intended
 LayMatched product by the end of this stage.
 
-**Weekend — core customer journey**
+**Saturday and Sunday early mornings only — bounded core customer journey**
 
-Concentrate on Jobs 5–9: My Money, Offer Finder, guided journey, My Offers and
-cross-screen state. Reuse proven backend capability and spend engineering time
-on coherence rather than unnecessary reinvention.
+Weekend capacity is deliberately limited to short early-morning sessions. Do not
+plan either day as a full development day. Use these sessions only for tightly
+bounded progress on the demo-critical customer chain: My Money/account setup,
+Offer Finder, guided journey, My Offers/Dashboard state, and the controlled demo
+dataset where it directly supports that story. Reuse proven backend capability
+and avoid opening broad new workstreams.
 
-**Monday — connected product**
+**Monday — finish the customer story first**
 
-Work through Jobs 10–14: Profile, bounded Community, restrained recognition,
-Owner Portal and the customer/central/Owner connection. If time is short,
-reduce the depth of these features while preserving the quality of Jobs 1–9.
+Use the full development day first to finish and connect the demo-critical
+customer journey and the two-profile demonstration setup. Only after that story
+is secure should work move to Profile, Community, recognition or Owner Portal.
+For Wednesday those areas may be deliberately shallow, provided the idea is
+professional and clear enough for the Owner to talk around without implying
+unfinished functionality is complete.
 
 **Tuesday — polish, rehearsal and freeze**
 
