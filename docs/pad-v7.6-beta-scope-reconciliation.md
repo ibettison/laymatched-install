@@ -3237,3 +3237,328 @@ customer onboarding/communications design. It should use the authoritative
 subscription/customer email rather than asking the installer to collect the
 address again, and should avoid sending installer tokens, passwords, MFA
 secrets, recovery codes or other reusable credentials by ordinary email.
+
+
+## 48. Wednesday Demo Readiness Plan — 2026-09-24
+
+### Objective and hard deadline
+
+The immediate product objective is a stable, coherent and professional LayMatched
+demonstration build by **Tuesday evening, 2026-09-29**, for an Owner demonstration
+on **Wednesday, 2026-09-30**.
+
+The objective is **demo-ready, not feature-complete**. The demo should show a
+credible connected LayMatched product using real working functionality wherever
+it already exists. Remaining PAD items do not all need to become green before
+Wednesday. Work is ordered by product dependency and visible customer value
+rather than by PAD requirement number.
+
+Tuesday evening is the demo freeze. After that point only genuine blockers in
+the agreed demonstration path should be changed.
+
+### Working principles for this sprint
+
+- Build one coherent product journey rather than a collection of disconnected
+  screens or calculators.
+- Reuse the existing matched-betting engine, A-07/My Money work, customer MFA,
+  activation and other proven functionality rather than rebuilding it.
+- Prioritise visible integration, usability, contextual guidance and consistent
+  presentation over new backend architecture unless the demo journey genuinely
+  requires a backend correction.
+- Preserve the agreed customer privacy boundary: central services and the Owner
+  Portal must not gain access to private betting selections, bookmaker/exchange
+  balances, stakes, liabilities, profits or credentials.
+- Use the current LayMatched visual identity: light blue/white presentation,
+  navy text, electric-blue actions, generous whitespace, professional cards and
+  top navigation. Retire legacy green/cream application styling. The application
+  is not to become a dark-themed product.
+- Use genuine LayMatched graphics and recognition assets. Do not introduce
+  greyhound imagery.
+- If time compresses, reduce feature depth before reducing reliability,
+  coherence or presentation quality.
+
+### Ordered development jobs
+
+#### Job 1 — Final installer destruction test and installer freeze
+
+Perform one final deliberate customer-error/recovery session on a clean test
+installation. Prioritise mistakes not yet accepted in Section 47: invalid
+Installer Token, password/confirmation mismatch, interruption/restart at another
+sensible point, and one realistic connection/interruption case if time permits.
+
+Fix only genuine safety, recovery or installation blockers discovered by this
+exercise. Cosmetic installer improvements become backlog items. Once this gate
+is complete, freeze installer work for the Wednesday demo unless a genuine
+release-blocking defect is discovered.
+
+#### Job 2 — LayMatched product shell and design system
+
+Transform the visible application shell before polishing individual features so
+that subsequent screens inherit one coherent product language.
+
+Deliver the current LayMatched blue/white identity, typography, spacing, cards,
+forms, buttons, status treatments and responsive behaviour. Establish the agreed
+top-navigation model across the customer application and remove remaining
+legacy green/cream presentation from the demo path.
+
+The intended navigation is:
+
+`Dashboard | Offer Finder | My Offers | My Money | Calculators | Community | Profile`
+
+This job should make the application visibly feel like the same product as the
+website and installer before deeper screen work begins.
+
+#### Job 3 — Login, first arrival and customer handoff
+
+Make the transition from installer/login/MFA into the customer application feel
+like one continuous LayMatched experience.
+
+Replace the old administrative-looking login presentation with the current
+LayMatched identity and remove premature MFA guidance from the ordinary login
+screen. MFA remains a real security step, but appears at the correct point in
+the journey.
+
+A new customer's first arrival should not be a collection of unexplained empty
+tables and zero values. It should welcome them and lead naturally into the
+Dashboard/Getting Started journey.
+
+#### Job 4 — Dashboard: answer “What should I do now?”
+
+Create the Dashboard as the customer's control centre rather than a statistics
+dump. Its primary questions are:
+
+1. **What should I do next?**
+2. **What offers have I got underway?**
+3. **How am I doing?**
+
+For a new customer, provide a concise Getting Started path:
+
+1. Set up your money/accounts.
+2. Find your first offer.
+3. Follow it through.
+
+For an established customer, the same Dashboard should progressively show real
+current state rather than permanent onboarding instructions.
+
+#### Job 5 — My Money as the working foundation
+
+Polish and expose the substantial A-07/My Money functionality already built:
+bookmaker/exchange catalogue and grouping, balances, account status, balance
+freshness, account creation and useful account detail.
+
+The goal is not another financial-engine rewrite. It is to make the existing
+functionality quick, understandable and professional enough that both a new
+matched bettor and an experienced customer with many accounts can understand
+their money position and move efficiently through it.
+
+This comes before the offer journey because bookmaker/exchange and available
+money context should already exist when an offer is started.
+
+#### Job 6 — Offer Finder to “Start this offer”
+
+Turn Offer Finder into a clear discovery experience using the existing offer
+capability. A customer should be able to understand the offer, its value,
+important terms/eligibility and what they need before starting it.
+
+Provide an obvious transition from discovery into the guided journey rather
+than leaving Offer Finder as an isolated information screen.
+
+#### Job 7 — Guided matched-betting journey
+
+Connect the chosen offer to the existing calculation and journey engine so that
+the customer is always clear about:
+
+- what has already happened;
+- what they need to do now;
+- what they need to confirm;
+- what LayMatched has calculated or remembered; and
+- what happens next.
+
+The governing principle remains:
+
+**Automate the admin. Assist the decisions. You place the bets.**
+
+Do not introduce autonomous bet placement. Customer action and confirmation
+remain where genuinely required.
+
+#### Job 8 — My Offers: remember the journey for the customer
+
+Make My Offers the persistent view of offers that are current, awaiting an
+action, progressing toward reward/conversion/settlement, or completed.
+
+A customer should be able to leave LayMatched and return later without having
+to remember where they had reached or maintain a parallel spreadsheet.
+
+This completes the loop started by Offer Finder.
+
+#### Job 9 — Connect Dashboard, Offers and Money
+
+After the individual customer screens are coherent, connect their visible state
+so that they behave as one application.
+
+Progressing an offer should be reflected appropriately in My Offers and the
+Dashboard. Relevant money/account state should be available where the journey
+needs it. Avoid duplicate manual entry where existing application state can be
+reused safely.
+
+**Jobs 1–9 are the Wednesday must-have cut line.** If the sprint becomes
+constrained, protect these jobs before expanding later demo features.
+
+#### Job 10 — Profile and persistent member identity
+
+Create a useful first Profile experience covering member identity, appropriate
+account/security information and the presentation seam for LayMatched
+recognition.
+
+Profile comes before Community because Community should use the same persistent
+member identity rather than creating a second identity model.
+
+#### Job 11 — Community: first credible product slice
+
+Implement a deliberately bounded but real Community experience for ideas,
+questions, problems, useful tips and discussion. It should feel collaborative,
+not like an IT ticketing system.
+
+The intended lifecycle remains:
+
+`Member raises something → Community discusses → Owner responds → Under
+consideration → Planned → Being worked on → Added to LayMatched`
+
+Community is LayMatched-wide rather than Founding-100-only. The Founding cohort
+helps establish the culture but later eligible members can participate.
+
+#### Job 12 — Recognition: enough to tell the product story
+
+Integrate recognition into Profile/Community without attempting a complicated
+points or scoring engine for the demo.
+
+Preserve the agreed hierarchy and meaning:
+
+- **Pioneer** — permanent identity for the genuine original Founding 100;
+- **Improver**, **Insighter**, **Champion** — contribution recognition available
+  to eligible members;
+- **Founding Patron** — exceptional unique recognition for the designated
+  founding patron, not a rank and not an attainable locked badge for others.
+
+Recognition should reward useful contribution and quality, not posting volume.
+
+#### Job 13 — Owner Portal: the other side of LayMatched
+
+Give the existing Owner Portal a coherent version of the same professional
+LayMatched presentation and make the strongest use of central operational data
+that already exists.
+
+Prioritise a useful overview of customers/installations, activation/onboarding
+and MFA state, version/update/health information, and Community items requiring
+Owner attention where those data are already supported.
+
+Do not attempt to finish a full CRM, accounting system, subscription suite,
+tax-preparation system or every Owner workflow before Wednesday.
+
+#### Job 14 — Customer, central and Owner integration
+
+Verify that the customer application, central collaboration layer and Owner
+Portal tell a coherent operational story while preserving the privacy boundary.
+
+The demonstration architecture is:
+
+`Private Customer VPS ↔ Central Collaboration / Recognition / Monitoring ↔ Owner Portal`
+
+This is the practical expression of:
+
+**Central collaboration, private betting.**
+
+#### Job 15 — Professional polish pass
+
+Perform one cross-product pass only after the demo journey is assembled:
+wording, empty states, loading/error states, alignment, spacing, terminology,
+dead ends, tablet/desktop responsiveness and obvious interaction defects.
+
+Do not spend this phase inventing new features.
+
+#### Job 16 — Build and rehearse the Wednesday demonstration
+
+Prepare believable demonstration data and rehearse one deterministic journey:
+
+`Login → Dashboard → My Money/account context → Offer Finder → Start offer →
+guided journey → My Offers → My Money/Dashboard outcome → Community/Profile →
+Owner Portal`
+
+The demo should show working product behaviour and clearly distinguish
+implemented functionality from future direction. Do not depend on an
+unreliable or unfinished path merely because it exists in the PAD.
+
+#### Job 17 — Tuesday evening demo freeze
+
+By Tuesday evening, run the exact Wednesday demonstration path as an acceptance
+exercise. Fix genuine blockers only and freeze the build.
+
+No late speculative feature work should be introduced after the freeze.
+
+### Sprint schedule
+
+**Friday morning — installer closure**
+
+Complete Job 1. Record any real defect and bounded correction. Then freeze the
+installer workstream for the demo.
+
+**Friday afternoon/evening — visible transformation**
+
+Concentrate on Jobs 2–4: product shell/design system, login/first arrival and
+Dashboard. The application should already look materially more like the intended
+LayMatched product by the end of this stage.
+
+**Weekend — core customer journey**
+
+Concentrate on Jobs 5–9: My Money, Offer Finder, guided journey, My Offers and
+cross-screen state. Reuse proven backend capability and spend engineering time
+on coherence rather than unnecessary reinvention.
+
+**Monday — connected product**
+
+Work through Jobs 10–14: Profile, bounded Community, restrained recognition,
+Owner Portal and the customer/central/Owner connection. If time is short,
+reduce the depth of these features while preserving the quality of Jobs 1–9.
+
+**Tuesday — polish, rehearsal and freeze**
+
+Jobs 15–17 only. Tuesday is for integration, usability/presentation correction,
+realistic demonstration data, rehearsal and blocker fixes. Significant new
+feature development should not begin on Tuesday.
+
+### Explicitly deferred from the Wednesday critical path
+
+Unless one becomes a genuine dependency of the agreed demo journey, do not
+allow the following to displace the work above:
+
+- full B-08 referral/VPS-credit accounting and reward workflow;
+- full backup/restore implementation or disaster-recovery expansion;
+- Stripe end-to-end expansion;
+- welcome-email automation and the broader welcome pack;
+- update-script UX redesign;
+- sophisticated Community moderation;
+- a complete recognition/scoring engine;
+- a full Owner CRM/accounting/tax system;
+- nonessential installer beautification after Job 1.
+
+The welcome-pack design should later include the optional Fasthosts VPS route
+using the authoritative referral URL
+`https://www.fasthosts.co.uk/?referral=37u6fp7gtbgc9n`, with a clear disclosure
+that it is a referral link and LayMatched may receive a referral benefit. It is
+not mandatory for customers who already have a suitable VPS.
+
+### Wednesday acceptance outcome
+
+The sprint succeeds if the Owner can confidently demonstrate a coherent
+customer story rather than claim that every PAD requirement is finished:
+
+`customer signs in → understands the next action → manages account/money
+context → finds an offer → follows the guided matched-betting journey → returns
+to tracked offer state → understands the resulting money/progress position →
+sees the beginnings of LayMatched identity/community → Owner demonstrates the
+central operational view without exposing private betting data`.
+
+Remaining PAD yellows are acceptable where they are explicitly outside this
+demo-critical path. After the Wednesday demonstration, development returns to
+the full Founding Beta PAD rather than treating this demo plan as a replacement
+for the wider release scope.
