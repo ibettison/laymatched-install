@@ -149,34 +149,46 @@ class RecognitionClientTests(unittest.TestCase):
         self.assertIn("HTTP 503", logged.getvalue())
 
     def test_http_wrappers_retain_only_safe_activation_error_classification(self):
-        body_secret = b"response-secret bearer-token signature nonce"
+        known_classifications = {
+            "activation_deactivated", "activation_incomplete", "conflict", "dns_pending",
+            "https_failed", "idempotency_conflict", "invalid_credential", "invalid_signature",
+            "licence_inactive", "nickname_invalid", "nickname_reserved", "nickname_unavailable",
+            "not_found", "replay_detected", "validation_failed", "version_conflict",
+        }
+        self.assertEqual(recognition_client.ACTIVATION_ERROR_CODES, known_classifications)
+        body_secret = b"response-secret bearer-token activation-session-jwt signature signing-key nonce request-hash password"
         methods = (recognition_client._get, recognition_client._post,
                    recognition_client._put, recognition_client._patch)
-        for wrapper in methods:
-            with self.subTest(wrapper=wrapper.__name__):
-                headers = email.message.Message()
-                headers["X-Activation-Error"] = "invalid_signature"
-                response_body = io.BytesIO(body_secret)
-                http_error = urllib.error.HTTPError(
-                    "https://central.example.test/resource", 401, "rejected", headers, response_body
-                )
-                with patch.object(recognition_client.urllib.request, "urlopen", side_effect=http_error):
-                    with self.assertRaises(recognition_client.RecognitionHTTPError) as raised:
-                        if wrapper == recognition_client._get:
-                            wrapper("https://central.example.test/resource", {"Authorization": "Bearer request-token"})
-                        else:
-                            wrapper("https://central.example.test/resource", {}, {"Authorization": "Bearer request-token"})
-                error = raised.exception
-                self.assertEqual(error.status, 401)
-                self.assertEqual(error.activation_error, "invalid_signature")
-                self.assertEqual(str(error), "central recognition request failed with HTTP 401 (invalid_signature)")
-                self.assertIsNone(error.__cause__)
-                self.assertEqual(response_body.tell(), 0)
-                for secret in (body_secret.decode(), "Authorization", "Bearer", "request-token", "session-token", "nonce-value"):
-                    self.assertNotIn(secret, str(error))
+        for classification in known_classifications:
+            for wrapper in methods:
+                with self.subTest(classification=classification, wrapper=wrapper.__name__):
+                    headers = email.message.Message()
+                    headers["X-Activation-Error"] = classification
+                    response_body = io.BytesIO(body_secret)
+                    http_error = urllib.error.HTTPError(
+                        "https://central.example.test/resource", 401, "rejected", headers, response_body
+                    )
+                    with patch.object(recognition_client.urllib.request, "urlopen", side_effect=http_error):
+                        with self.assertRaises(recognition_client.RecognitionHTTPError) as raised:
+                            if wrapper == recognition_client._get:
+                                wrapper("https://central.example.test/resource", {"Authorization": "Bearer request-token"})
+                            else:
+                                wrapper("https://central.example.test/resource", {}, {"Authorization": "Bearer request-token"})
+                    error = raised.exception
+                    self.assertEqual(error.status, 401)
+                    self.assertEqual(error.activation_error, classification)
+                    self.assertEqual(str(error), f"central recognition request failed with HTTP 401 ({classification})")
+                    self.assertIsNone(error.__cause__)
+                    self.assertEqual(response_body.tell(), 0)
+                    for secret in (body_secret.decode(), "Authorization", "Bearer", "request-token", "session-token",
+                                   "nonce-value", "private-key", "public-key", "signature-value", "request-hash"):
+                        self.assertNotIn(secret, str(error))
 
     def test_malformed_and_overlong_activation_error_classifications_are_discarded(self):
-        for classification in ("Invalid Signature", "invalid/signature", "invalid_signature\nsecret", "a" * 65):
+        for classification in (
+            "unexpected_but_valid", "invalid_signature_extra", "Invalid Signature",
+            "invalid/signature", "invalid_signature\nsecret", "a" * 65,
+        ):
             with self.subTest(classification=classification):
                 headers = email.message.Message()
                 headers["X-Activation-Error"] = classification

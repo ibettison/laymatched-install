@@ -8,7 +8,6 @@ import base64
 import datetime as dt
 import json
 import os
-import re
 import subprocess
 import sys
 import threading
@@ -27,7 +26,27 @@ except ModuleNotFoundError:
 VERSION_CONFLICT_STATUS = 409
 TRANSIENT_HTTP_STATUSES = frozenset({408, 425, 429, *range(500, 600)})
 CENTRAL_RETRY_SECONDS = 60
-ACTIVATION_ERROR_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}\Z", re.ASCII)
+# Stable error identifiers emitted by the central activation API's
+# authenticated/signed routes. Keep this allowlist in step with that API;
+# arbitrary response header text must never reach operator diagnostics.
+ACTIVATION_ERROR_CODES = frozenset({
+    "activation_deactivated",
+    "activation_incomplete",
+    "conflict",
+    "dns_pending",
+    "https_failed",
+    "idempotency_conflict",
+    "invalid_credential",
+    "invalid_signature",
+    "licence_inactive",
+    "nickname_invalid",
+    "nickname_reserved",
+    "nickname_unavailable",
+    "not_found",
+    "replay_detected",
+    "validation_failed",
+    "version_conflict",
+})
 DNS_PROGRESS_INTERVAL_SECONDS = 30
 DNS_RETRY_COMPLETION_GRACE_SECONDS = 30
 DNS_RESERVATION_RENEWAL_SECONDS = 1800
@@ -45,9 +64,7 @@ class RecognitionHTTPError(RuntimeError):
 
 
 def _safe_activation_error(value: str | None) -> str | None:
-    if value is None or len(value) > 64 or ACTIVATION_ERROR_PATTERN.fullmatch(value) is None:
-        return None
-    return value
+    return value if value in ACTIVATION_ERROR_CODES else None
 
 
 def _http_error(error: urllib.error.HTTPError) -> RecognitionHTTPError:
