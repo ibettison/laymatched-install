@@ -463,6 +463,108 @@ class RecognitionClientTests(unittest.TestCase):
                 recognition_client.reserve_hostname(args)
         authenticated.assert_not_called()
 
+    def _https_args(self):
+        return type("Args", (), {
+            "state_dir": self.directory,
+            "central_url": "https://central",
+            "app_version": "v0.2.0-rc.5",
+            "hostname": "winning-way.matched.laysports.co.uk",
+            "certificate": str(self.directory / "cert.pem"),
+            "challenge_root": self.directory / "challenge",
+        })
+
+    def _https_session(self):
+        session = {
+            "activation_id": "22222222-2222-4222-8222-222222222222",
+            "access_token": "central-session",
+            "expires_at": int(time.time()) + 900,
+        }
+        (self.directory / "session.json").write_text(json.dumps(session))
+        return session
+
+    def _verified_https_status(self, session):
+        return {
+            "activation_id": session["activation_id"],
+            "installation_id": "11111111-1111-4111-8111-111111111111",
+            "hostname": "winning-way.matched.laysports.co.uk",
+            "profile": {"complete": True},
+            "https": {
+                "status": "verified",
+                "verified_at": "2026-09-24T10:00:00Z",
+                "certificate_not_after": "2026-12-23T10:00:00Z",
+                "challenge_nonce": None,
+            },
+        }
+
+    def test_profile_pending_resume_reuses_matching_central_https_verification(self):
+        Journal(self.directory).advance("profile_pending")
+        session = self._https_session()
+        central = self._verified_https_status(session)
+        with patch.object(recognition_client, "_ensure_session", return_value=session), \
+             patch.object(recognition_client, "_status", return_value=central), \
+             patch.object(recognition_client, "_write_challenge") as write_challenge, \
+             patch.object(recognition_client, "_request_authenticated") as request, \
+             patch.object(recognition_client.subprocess, "run") as openssl:
+            self.assertEqual(recognition_client.report_https(self._https_args()), 0)
+        write_challenge.assert_not_called()
+        request.assert_not_called()
+        openssl.assert_not_called()
+
+    def test_profile_pending_resume_rejects_inconsistent_central_https_identity(self):
+        Journal(self.directory).advance("profile_pending")
+        session = self._https_session()
+        variants = (
+            {"installation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+            {"activation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+            {"hostname": "other.matched.laysports.co.uk"},
+            {"https": {"status": "pending", "challenge_nonce": "fresh-nonce"}},
+            {"https": {"status": "verified", "verified_at": None}},
+            {"profile": {"complete": False}},
+        )
+        for change in variants:
+            central = self._verified_https_status(session)
+            central.update(change)
+            with self.subTest(change=change), \
+                 patch.object(recognition_client, "_ensure_session", return_value=session), \
+                 patch.object(recognition_client, "_status", return_value=central), \
+                 patch.object(recognition_client, "_write_challenge") as write_challenge, \
+                 patch.object(recognition_client, "_request_authenticated") as request:
+                with self.assertRaises(RuntimeError):
+                    recognition_client.report_https(self._https_args())
+            write_challenge.assert_not_called()
+            request.assert_not_called()
+
+    def test_downgraded_local_stage_cannot_reuse_central_https_verification(self):
+        Journal(self.directory).advance("dns_ready")
+        session = self._https_session()
+        with patch.object(recognition_client, "_ensure_session", return_value=session), \
+             patch.object(recognition_client, "_status") as status, \
+             patch.object(recognition_client, "_write_challenge") as write_challenge:
+            with self.assertRaisesRegex(RuntimeError, "local activation stage"):
+                recognition_client.report_https(self._https_args())
+        status.assert_not_called()
+        write_challenge.assert_not_called()
+
+    def test_initial_https_pending_still_submits_fresh_central_challenge(self):
+        Journal(self.directory).advance("https_pending")
+        session = self._https_session()
+        central = self._verified_https_status(session)
+        central["profile"] = {"complete": False}
+        central["https"] = {"status": "pending", "challenge_nonce": "fresh_https_nonce_123456"}
+        args = self._https_args()
+        openssl = [
+            type("Completed", (), {"stdout": "sha256 Fingerprint=AA:BB:CC\n"})(),
+            type("Completed", (), {"stdout": "notAfter=Dec 23 10:00:00 2026 GMT\n"})(),
+        ]
+        with patch.object(recognition_client, "_ensure_session", return_value=session), \
+             patch.object(recognition_client, "_status", return_value=central), \
+             patch.object(recognition_client, "_write_challenge") as write_challenge, \
+             patch.object(recognition_client.subprocess, "run", side_effect=openssl), \
+             patch.object(recognition_client, "_request_authenticated", return_value=({}, session)) as request:
+            self.assertEqual(recognition_client.report_https(args), 0)
+        write_challenge.assert_called_once_with(args.challenge_root, "https", "fresh_https_nonce_123456")
+        self.assertEqual(request.call_args.kwargs["path"], f"/v1/activations/{session['activation_id']}/https-proof")
+
     def test_mfa_report_reads_verified_state_from_customer_api_database(self):
         session = {"activation_id": "22222222-2222-4222-8222-222222222222", "access_token": "central-session", "version": 4}
         args = type("Args", (), {
