@@ -2998,22 +2998,29 @@ The customer application should expose a quiet service-status indication where
 appropriate (for example connected/current version/last check) rather than
 frightening users with intrusive monitoring language.
 
-### Founding 100 Community and collaboration
+### LayMatched Community and collaboration
 
-Community is a product pillar, not a generic forum or social-media clone. It is
-centred on improving LayMatched and helping Founding Members work with the
-Owner and each other.
+Community is a product pillar, not a generic forum or social-media clone. The
+Founding 100 establish its initial culture, but Community is a **LayMatched-wide
+capability** for eligible members. Joining after the Founding 100 must never
+prevent a member from contributing useful information, insight, ideas, support,
+or product feedback, or from being recognised for a meaningful contribution.
+
+Founding status and contribution recognition are deliberately separate. Pioneer
+records the historical fact of being one of the original Founding 100; it is not
+a prerequisite for participating in Community or earning contribution-based
+recognition.
 
 A member must be able to raise an idea, report something that is not working
 well, ask a question, share a useful tip, or request discussion with Ian.
-Other Founding Members may contribute where appropriate. Community content is
-stored centrally and rendered natively inside the customer application so that
-members on separate private VPS installations participate in the same shared
-collaboration space.
+Other eligible LayMatched members may contribute where appropriate. Community
+content is stored centrally and rendered natively inside the customer
+application so that members on separate private VPS installations participate
+in the same shared collaboration space.
 
 The intended improvement loop is:
 
-`Member raises something → Founders discuss → Ian responds → Under consideration → Planned → Being worked on → Added to LayMatched`.
+`Member raises something → Community discusses → Ian responds → Under consideration → Planned → Being worked on → Added to LayMatched`.
 
 Members should be able to see the status of things they raise. The experience
 must use natural product language and must not feel like an IT ticketing system.
@@ -3023,17 +3030,21 @@ full discussion experience belongs in Community.
 
 ### Recognition and Profile
 
-Recognition is centrally stored so that it follows the Founding Member rather
+Recognition is centrally stored so that it follows the LayMatched member rather
 than being trapped on one VPS. The Dashboard carries only a restrained
 recognition/profile indicator; Profile is the proper home for the member's
 recognition collection and account/security/preferences.
 
 The established recognition identities are:
 
-- Pioneer — original Founding 100 identity;
-- Improver — meaningful contribution that improves the product;
-- Insighter — valuable experience, thinking, or use-case contribution;
-- Champion — repeated meaningful contribution/help.
+- Pioneer — permanent historical identity for the original Founding 100; it
+  cannot be earned by later members;
+- Improver — meaningful contribution that improves the product; available to
+  eligible LayMatched members whether founding or later;
+- Insighter — valuable experience, thinking, or use-case contribution; available
+  to eligible LayMatched members whether founding or later;
+- Champion — repeated meaningful contribution/help; available to eligible
+  LayMatched members whether founding or later.
 
 Recognition is not driven by post counts or engagement gaming. Awards are made
 for meaningful contribution.
@@ -3041,7 +3052,7 @@ for meaningful contribution.
 Earned recognition must also be visible **within Community collaboration**, not
 confined to Profile. A member's earned shields form part of their Community
 identity and should be displayed in a restrained way alongside their name on
-discussions and replies. This lets other Founding Members see that useful
+discussions and replies. This lets other LayMatched members see that useful
 contributions are noticed and valued.
 
 When a contribution directly results in recognition, LayMatched should be able
@@ -3052,13 +3063,19 @@ a link back to the relevant Community contribution when appropriate.
 
 The intended recognition incentive loop is:
 
-`Contribute useful information or insight → Founders discuss → LayMatched
+`Contribute useful information or insight → Community discusses → LayMatched
 benefits → meaningful contribution is acknowledged → earned recognition is
 visible in Community → further useful contribution is encouraged`.
 
 This visibility is intended to encourage quality participation, not competition
 for activity. Posting frequency, reactions, or raw engagement must never by
 themselves qualify a member for a shield.
+
+A later joining member must have the same opportunity as a Founding Member to
+earn Improver, Insighter, or Champion through meaningful contribution. Founding
+status may retain its own permanent identity and appropriate founding-specific
+benefits, but it must not create a closed class that owns product discussion or
+contribution recognition.
 
 **Founding Patron is exceptional and unique to the Owner's friend. It is not
 part of the normal recognition progression, is not attainable by other members,
