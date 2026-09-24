@@ -3124,3 +3124,116 @@ Where implementation reveals a necessary contract change between the customer
 VPS, central services, and Owner Portal, that contract must preserve the privacy
 boundary above and be reviewed before implementation.
 
+
+
+## 47. RC5 Customer Installation, UX Acceptance & Failure Recovery — 2026-09-24
+
+### Acceptance objective and candidate
+
+A completely clean Ubuntu 24.04 AWS customer VPS was used to experience the
+customer installation as a real customer rather than as a source-level test.
+The installation used immutable candidate `v0.2.0-rc.5` with the existing
+candidate manifest and the approved application source
+`23f49ef427570bda7e45fa103452236cca09358f`.
+
+The exercise was deliberately treated as customer-experience acceptance. The
+installer was allowed to perform its normal Docker, registry, DNS, HTTPS,
+application-health, activation-profile and MFA journey. The revised installer
+started central hostname/DNS work early enough to overlap it with useful local
+installation work. A visible blocking DNS wait still remained; the observed
+final wait line was 482 seconds before HTTPS proceeded. This is a future
+experience/performance improvement rather than a release-blocking functional
+failure.
+
+HTTPS then completed successfully, Certbot obtained the customer certificate,
+Nginx validation passed, and the customer login page was verified at the
+customer hostname.
+
+### Customer-facing installer experience accepted
+
+The revised activation-profile wording explains that full name, town/city and
+two-letter country code are collected for the LayMatched activation record and
+are not added to the customer server configuration.
+
+The MFA handoff presents a dedicated `ONE LAST STEP` screen with the customer
+URL and simple instructions to sign in, configure Authenticator, enter the
+verification code and save recovery codes. The terminal automatically waits
+for completion and does not require the customer to press a key.
+
+After verified MFA the installer displays `ACCOUNT SECURED`, completes central
+activation, enables the recognition heartbeat scheduler, and presents the
+customer-focused `ALL DONE! / WELCOME TO LAYMATCHED` completion screen. Detailed
+technical installation information is kept separately in
+`/opt/laymatched/installation-support.txt`.
+
+The Owner accepted this customer-facing installation experience.
+
+### Real interruption and recovery proof
+
+During the MFA browser handoff the installer was accidentally interrupted with
+Ctrl+C while the customer attempted to copy the displayed URL. This created a
+realistic recovery scenario rather than a synthetic failure test.
+
+The first retry exposed a defect: the Release Candidate clean-install guard
+rejected every RC invocation that found existing configuration, despite the
+installation having durable resumable state. The recovery implementation was
+changed so that an RC retry is permitted only when evidence proves it is the
+same interrupted immutable candidate and installation. Candidate identity,
+source SHA, image digests, registry/release identity, installation ID, customer
+hostname, activation journal and authenticated activation session must agree,
+and the permitted MFA-handoff recovery state must be proven. Missing,
+mismatched, unrelated or completed state remains fail-closed.
+
+The preserved AWS installation was then used to prove this change. The installer
+reported that it had verified the interrupted Release Candidate installation
+and was resuming at the MFA handoff.
+
+That genuine retry exposed a second recovery defect. HTTPS had already been
+successfully proven during the original run, but the retry attempted to replay
+the one-time central HTTPS challenge. Central correctly rejected the consumed
+challenge. Recovery was amended so that an authenticated same-installation
+resume can reuse an already recorded central HTTPS verification only when
+durable local and central state agree on activation ID, installation ID and
+hostname, central HTTPS is recorded as verified with a verification timestamp,
+and the expected activation/profile state is present. Fresh HTTPS installation
+continues to require the normal challenge and inconsistent or downgraded state
+fails closed. The customer login route is still independently verified.
+
+The same preserved RC5 installation was run again with the corrected installer.
+It safely passed the RC identity recovery checks, reused the previously verified
+HTTPS state, independently verified the customer login route, returned to
+`ONE LAST STEP`, automatically detected completed MFA and recovery codes,
+completed central activation, enabled the heartbeat scheduler, and reached the
+final `WELCOME TO LAYMATCHED` screen.
+
+### Acceptance conclusion
+
+The RC5 customer exercise therefore provides direct acceptance evidence for:
+
+- clean customer installation through DNS, HTTPS, login and MFA;
+- customer-facing installer/MFA/completion experience;
+- durable same-candidate recovery after terminal interruption at the MFA handoff;
+- fail-closed protection against mismatched/unrelated RC state;
+- recovery after a previously consumed one-time HTTPS challenge using
+  authenticated durable verification state rather than bypassing HTTPS proof;
+- automatic continuation from verified MFA through central activation and
+  heartbeat enablement.
+
+Installer recovery is therefore accepted for the exercised interruption path.
+This does not imply that every possible server, network, disk or operating-system
+failure mode has been proven. The remaining visible DNS delay may be improved
+later without reopening this accepted functional recovery path.
+
+### Follow-up customer-onboarding considerations
+
+The next installer/onboarding review should explicitly exercise customer input
+mistakes, especially an invalid Installer Token and a password/confirmation
+mismatch, and confirm that errors are clear, safe, retryable and do not leave
+ambiguous partial state.
+
+The subscription journey already has an email identity available before VPS
+installation. A post-purchase welcome pack should be considered as part of the
+customer onboarding/communications design. It should use the authoritative
+subscription/customer email rather than asking the installer to collect the
+address again, and should avoid sending installer tokens, passwords, MFA
+secrets, recovery codes or other reusable credentials by ordinary email.
