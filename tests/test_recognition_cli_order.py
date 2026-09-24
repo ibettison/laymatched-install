@@ -44,7 +44,8 @@ class RecognitionCLIOrderTests(unittest.TestCase):
                 invocations = list(_recognition_invocations((ROOT / relative_path).read_text()))
                 commands = {args[next(i for i, value in enumerate(args) if value in RECOGNITION_COMMANDS)] for args in invocations}
                 self.assertEqual(commands, expected_commands)
-                self.assertEqual(len(invocations), len(expected_commands))
+                expected_invocations = len(expected_commands) + (1 if relative_path == "install.sh" else 0)
+                self.assertEqual(len(invocations), expected_invocations)
                 for args in invocations:
                     command_index = next(i for i, value in enumerate(args) if value in RECOGNITION_COMMANDS)
                     self.assertEqual(args[:6:2], list(GLOBAL_OPTIONS))

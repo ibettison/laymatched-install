@@ -473,8 +473,9 @@ def reserve_hostname(args) -> int:
     started_at = time.monotonic()
     soft_deadline = started_at + max(1, args.wait_seconds)
     next_progress_at = started_at + DNS_PROGRESS_INTERVAL_SECONDS
-    print("[INFO] Waiting for your LayMatched hostname/DNS to become ready...", file=sys.stderr, flush=True)
-    print("[INFO] This can take several minutes. The installer is still running — please do not close this window.", file=sys.stderr, flush=True)
+    if not getattr(args, "begin_only", False):
+        print("[INFO] Waiting for your LayMatched hostname/DNS to become ready...", file=sys.stderr, flush=True)
+        print("[INFO] This can take several minutes. The installer is still running — please do not close this window.", file=sys.stderr, flush=True)
 
     session = _ensure_session(args, directory, _session(directory), retry_deadline=soft_deadline)
     activation_status = _status(args, directory, session, retry_deadline=soft_deadline)
@@ -521,6 +522,9 @@ def reserve_hostname(args) -> int:
     if activation_status.get("reservation_id"):
         reservation = _reservation_from_status(activation_status)
     _write_hostname(directory, reservation)
+    if getattr(args, "begin_only", False):
+        print(json.dumps(reservation, sort_keys=True))
+        return 0
     if reservation.get("status") == "dns_ready":
         print(json.dumps(reservation, sort_keys=True))
         return 0
@@ -776,6 +780,7 @@ def main() -> int:
     reserve_parser.add_argument("--public-ip", dest="public_ipv4", required=True)
     reserve_parser.add_argument("--challenge-root", default="/var/www/letsencrypt")
     reserve_parser.add_argument("--wait-seconds", type=int, default=300)
+    reserve_parser.add_argument("--begin-only", action="store_true")
     https_parser = sub.add_parser("report-https")
     https_parser.add_argument("--hostname", required=True)
     https_parser.add_argument("--certificate", required=True)

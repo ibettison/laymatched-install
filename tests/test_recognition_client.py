@@ -200,6 +200,40 @@ class RecognitionClientTests(unittest.TestCase):
         self.assertEqual(saved["reservation_id"], status["reservation_id"])
         self.assertEqual(saved["hostname"], status["hostname"])
 
+    def test_hostname_reservation_begin_only_starts_dns_without_waiting(self):
+        session = {
+            "activation_id": "22222222-2222-4222-8222-222222222222",
+            "access_token": "central-session", "expires_at": int(time.time()) + 900,
+        }
+        (self.directory / "session.json").write_text(json.dumps(session))
+        args = type("Args", (), {
+            "state_dir": self.directory, "central_url": "https://central", "nickname": "winning-way",
+            "public_ipv4": "203.0.113.10", "challenge_root": self.directory / "challenge",
+            "wait_seconds": 300, "begin_only": True,
+        })
+        status = {
+            "reservation_id": "33333333-3333-4333-8333-333333333333",
+            "nickname": "winning-way", "hostname": "winning-way.matched.laysports.co.uk",
+            "dns": {"status": "pending", "retry_after": 30},
+            "reservation_expires_at": "2026-09-25T12:00:00Z", "network_challenge": None,
+            "version": 4,
+        }
+        output = io.StringIO()
+        errors = io.StringIO()
+        with patch.object(recognition_client, "_ensure_session", return_value=session), \
+             patch.object(recognition_client, "_status", return_value=status) as get_status, \
+             patch.object(recognition_client, "_request_authenticated") as authenticated, \
+             patch.object(recognition_client.time, "sleep") as sleep, \
+             patch("sys.stdout", output), patch("sys.stderr", errors):
+            self.assertEqual(recognition_client.reserve_hostname(args), 0)
+        get_status.assert_called_once()
+        authenticated.assert_not_called()
+        sleep.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue())["status"], "dns_pending")
+        self.assertEqual(errors.getvalue(), "")
+        saved = json.loads((self.directory / "hostname.json").read_text())
+        self.assertEqual(saved["reservation_id"], status["reservation_id"])
+
     def test_hostname_reservation_wait_reports_initial_message_and_elapsed_progress(self):
         (self.directory / "session.json").write_text(json.dumps({
             "activation_id": "22222222-2222-4222-8222-222222222222",
