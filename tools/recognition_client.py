@@ -19,9 +19,9 @@ import uuid
 from pathlib import Path
 
 try:
-    from tools.local_activation import KeyService
+    from tools.local_activation import KeyService, validate as validate_activation_state
 except ModuleNotFoundError:
-    from local_activation import KeyService
+    from local_activation import KeyService, validate as validate_activation_state
 
 
 VERSION_CONFLICT_STATUS = 409
@@ -630,7 +630,37 @@ def reserve_hostname(args) -> int:
 def report_https(args) -> int:
     directory = Path(args.state_dir)
     session = _ensure_session(args, directory, _session(directory))
+    state = validate_activation_state(json.loads((directory / "state.json").read_text()))
+    stage = state.get("stage")
+    if stage not in {"https_pending", "profile_pending", "mfa_pending", "active"}:
+        raise RuntimeError("local activation stage is inconsistent with HTTPS reporting")
     status = _status(args, directory, session)
+    central_https = status.get("https") or {}
+    central_verified = central_https.get("status") == "verified"
+    identity_matches = (
+        status.get("activation_id") == session["activation_id"]
+        and status.get("installation_id") == state.get("installation_id")
+        and status.get("hostname") == args.hostname
+    )
+    if not identity_matches:
+        raise RuntimeError("central activation status does not match this installation session")
+
+    # Central consumes the one-time challenge when it accepts the original
+    # HTTPS proof. A rerun at the same unfinished local stage must use that
+    # authenticated, activation-bound result instead of replaying the nonce.
+    # The login route is still independently checked by the installer after
+    # this returns.
+    if stage in {"https_pending", "profile_pending"} and central_verified:
+        if not central_https.get("verified_at"):
+            raise RuntimeError("central HTTPS verification does not match this installation session")
+        if stage == "profile_pending" and (status.get("profile") or {}).get("complete") is not True:
+            raise RuntimeError("local profile-pending stage conflicts with central activation state")
+        print(json.dumps({"activation_id": session["activation_id"], "hostname": args.hostname,
+                          "https": central_https, "resumed": True}, sort_keys=True))
+        return 0
+
+    if stage == "profile_pending":
+        raise RuntimeError("local profile-pending stage conflicts with central HTTPS state")
     challenge = (status.get("https") or {}).get("challenge_nonce")
     hostname = status.get("hostname")
     if not challenge or hostname != args.hostname:
