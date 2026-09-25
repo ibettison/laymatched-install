@@ -117,6 +117,65 @@ class RecognitionClientTests(unittest.TestCase):
         self.assertEqual(error.status, 409)
         self.assertIn("fetch current activation status", str(error))
 
+    def test_reserve_only_persists_a_matching_reservation_without_waiting_for_network_challenge(self):
+        args = type("Args", (), {
+            "state_dir": self.directory, "central_url": "https://central", "nickname": "winning-way",
+            "public_ipv4": "203.0.113.10", "challenge_root": self.directory / "challenge",
+            "wait_seconds": 1, "reserve_only": True,
+        })
+        session = {"activation_id": "22222222-2222-4222-8222-222222222222", "access_token": "session"}
+        reservation = {"reservation_id": "reservation-1", "nickname": "winning-way",
+                       "hostname": "winning-way.matched.laysports.co.uk", "status": "dns_pending"}
+        progress = io.StringIO()
+        with patch.object(recognition_client, "_session", return_value=session), \
+             patch.object(recognition_client, "_ensure_session", return_value=session), \
+             patch.object(recognition_client, "_status", return_value={"reservation_id": None}), \
+             patch.object(recognition_client, "_request_authenticated", side_effect=[
+                 ({"nickname": "winning-way", "available": True, "reason": None}, session),
+                 (reservation, session),
+             ]) as request, \
+             patch.object(recognition_client, "_write_challenge") as write_challenge, \
+             patch("sys.stderr", progress):
+            self.assertEqual(recognition_client.reserve_hostname(args), 0)
+        self.assertEqual(request.call_count, 2)
+        write_challenge.assert_not_called()
+        self.assertNotIn("Waiting for your LayMatched hostname/DNS", progress.getvalue())
+        saved = json.loads((self.directory / "hostname.json").read_text())
+        self.assertEqual(saved["reservation_id"], "reservation-1")
+
+    def test_only_explicit_unavailable_availability_response_is_retryable_collision(self):
+        args = type("Args", (), {
+            "state_dir": self.directory, "central_url": "https://central", "nickname": "winning-way",
+            "public_ipv4": "203.0.113.10", "challenge_root": self.directory / "challenge",
+            "wait_seconds": 1, "reserve_only": True,
+        })
+        session = {"activation_id": "22222222-2222-4222-8222-222222222222", "access_token": "session"}
+        with patch.object(recognition_client, "_session", return_value=session), \
+             patch.object(recognition_client, "_ensure_session", return_value=session), \
+             patch.object(recognition_client, "_status", return_value={"reservation_id": None}), \
+             patch.object(recognition_client, "_request_authenticated", return_value=(
+                 {"nickname": "winning-way", "available": False, "reason": "unavailable"}, session
+             )):
+            with self.assertRaisesRegex(recognition_client.NicknameUnavailable, "nickname is unavailable"):
+                recognition_client.reserve_hostname(args)
+
+    def test_malformed_availability_response_is_not_a_nickname_collision(self):
+        args = type("Args", (), {
+            "state_dir": self.directory, "central_url": "https://central", "nickname": "winning-way",
+            "public_ipv4": "203.0.113.10", "challenge_root": self.directory / "challenge",
+            "wait_seconds": 1, "reserve_only": True,
+        })
+        session = {"activation_id": "22222222-2222-4222-8222-222222222222", "access_token": "session"}
+        with patch.object(recognition_client, "_session", return_value=session), \
+             patch.object(recognition_client, "_ensure_session", return_value=session), \
+             patch.object(recognition_client, "_status", return_value={"reservation_id": None}), \
+             patch.object(recognition_client, "_request_authenticated", return_value=(
+                 {"available": False}, session
+             )):
+            with self.assertRaisesRegex(RuntimeError, "invalid nickname availability") as raised:
+                recognition_client.reserve_hostname(args)
+            self.assertNotIsInstance(raised.exception, recognition_client.NicknameUnavailable)
+
     def test_transient_central_failure_is_retried_but_terminal_http_failure_is_not(self):
         calls = []
         with patch.object(recognition_client.time, "sleep") as sleep, \

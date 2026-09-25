@@ -41,16 +41,34 @@ def test_installer_delivers_hostname_and_https_helpers_without_dns_credentials()
     assert "CLOUDFLARE_API_TOKEN" not in installer
 
 
-def test_fresh_install_prepares_challenge_listener_before_central_network_update() -> None:
+def test_fresh_install_reserves_and_starts_dns_before_independent_setup_then_proves_network() -> None:
     installer = (ROOT / "install.sh").read_text()
     prepare = installer.index("--network-only")
-    central_network = installer.index("reserve-hostname")
+    early_reservation = installer.index("reserve-hostname --reserve-only")
+    account_prompt = installer.index('Enter LayMatched Login ID:')
+    central_network = installer.index("reserve-hostname --begin-only")
     certbot_install = installer.index("Installing Certbot for customer HTTPS")
     compose_install = installer.index("# -- Phase 7: Pull and start services")
-    assert prepare < central_network
-    assert central_network < certbot_install < compose_install
+    assert early_reservation < account_prompt
+    assert early_reservation < prepare < central_network
+    assert early_reservation < certbot_install < compose_install
     assert "--begin-only" in installer
+    assert "--reserve-only" in installer
     assert "Waiting for central DNS verification before requesting HTTPS." in installer
+
+
+def test_authorization_then_nickname_then_reservation_is_fail_closed_and_reprompts_only_collision() -> None:
+    installer = (ROOT / "install.sh").read_text()
+    authorization = installer.index('call_auth_api "$INSTALLER_TOKEN"')
+    nickname = installer.index('Choose your LayMatched customer nickname', authorization)
+    reservation = installer.index("reserve-hostname --reserve-only", nickname)
+    collision = installer.index('if [ "$reservation_status" -ne 3 ]', reservation)
+    retry_prompt = installer.index("Choose another LayMatched customer nickname", collision)
+    login = installer.index('Enter LayMatched Login ID:', reservation)
+    assert authorization < nickname < reservation < login
+    assert reservation < collision < retry_prompt < login
+    assert '"$reservation_status" -ne 3' in installer
+    assert "That nickname is already in use" in installer
 
 
 def test_network_only_listener_exposes_only_the_bound_challenge_route(tmp_path: Path) -> None:
