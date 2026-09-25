@@ -34,11 +34,16 @@ DNS_RENEWAL_REQUEST_SAFETY_SECONDS = 30
 DNS_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
+class NicknameUnavailable(RuntimeError):
+    pass
+
+
 class RecognitionHTTPError(RuntimeError):
-    def __init__(self, status: int):
+    def __init__(self, status: int, code: str | None = None):
         detail = "; fetch current activation status before retrying" if status == VERSION_CONFLICT_STATUS else ""
         super().__init__(f"central recognition request failed with HTTP {status}{detail}")
         self.status = status
+        self.code = code
 
 
 def _is_transient_error(error: BaseException) -> bool:
@@ -77,7 +82,12 @@ def _post(url: str, body: dict, headers: dict[str, str], timeout: int = 15) -> d
         with urllib.request.urlopen(request, timeout=timeout) as response:
             value = json.loads(response.read())
     except urllib.error.HTTPError as error:
-        raise RecognitionHTTPError(error.code) from error
+        try:
+            body = json.loads(error.read())
+        except (ValueError, OSError):
+            body = {}
+        code = body.get("error") if isinstance(body, dict) else None
+        raise RecognitionHTTPError(error.code, code if isinstance(code, str) else None) from error
     if not isinstance(value, dict):
         raise RuntimeError("central recognition returned an invalid response")
     return value
@@ -473,7 +483,7 @@ def reserve_hostname(args) -> int:
     started_at = time.monotonic()
     soft_deadline = started_at + max(1, args.wait_seconds)
     next_progress_at = started_at + DNS_PROGRESS_INTERVAL_SECONDS
-    if not getattr(args, "begin_only", False):
+    if not getattr(args, "begin_only", False) and not getattr(args, "reserve_only", False):
         print("[INFO] Waiting for your LayMatched hostname/DNS to become ready...", file=sys.stderr, flush=True)
         print("[INFO] This can take several minutes. The installer is still running — please do not close this window.", file=sys.stderr, flush=True)
 
@@ -492,16 +502,33 @@ def reserve_hostname(args) -> int:
             args, directory, session, method="POST", path=availability_path, body=availability_body,
             operation="nickname availability", retry_deadline=soft_deadline,
         )
-        if not availability.get("available"):
-            raise RuntimeError("nickname is unavailable")
+        if availability.get("nickname") != args.nickname or not isinstance(availability.get("available"), bool):
+            raise RuntimeError("central recognition returned an invalid nickname availability response")
+        if not availability["available"]:
+            if availability.get("reason") == "unavailable":
+                raise NicknameUnavailable("nickname is unavailable")
+            raise RuntimeError("central recognition did not approve this nickname")
+        if availability.get("reason") is not None:
+            raise RuntimeError("central recognition returned an inconsistent nickname availability response")
         reservation_body = {"nickname": args.nickname, "public_ipv4": args.public_ipv4}
         reservation_path = f"/v1/activations/{session['activation_id']}/nickname-reservations"
-        reservation, session = _request_authenticated(
-            args, directory, session, method="POST", path=reservation_path, body=reservation_body,
-            operation="nickname reservation", retry_deadline=soft_deadline,
-        )
+        try:
+            reservation, session = _request_authenticated(
+                args, directory, session, method="POST", path=reservation_path, body=reservation_body,
+                operation="nickname reservation", retry_deadline=soft_deadline,
+            )
+        except RecognitionHTTPError as error:
+            if error.status == 409 and error.code == "nickname_unavailable":
+                raise NicknameUnavailable("nickname is unavailable") from error
+            raise
     if reservation.get("nickname") != args.nickname or reservation.get("hostname") != f"{args.nickname}.matched.laysports.co.uk":
         raise RuntimeError("central recognition returned a hostname reservation that does not match the requested nickname")
+    if not isinstance(reservation.get("reservation_id"), str) or not reservation["reservation_id"]:
+        raise RuntimeError("central recognition returned a reservation without a valid reservation identity")
+    if getattr(args, "reserve_only", False):
+        _write_hostname(directory, reservation)
+        print(json.dumps(reservation, sort_keys=True))
+        return 0
     challenge = reservation.get("network_challenge")
     if not challenge and not resuming_reservation:
         raise RuntimeError("central recognition did not issue a network challenge")
@@ -811,6 +838,7 @@ def main() -> int:
     reserve_parser.add_argument("--challenge-root", default="/var/www/letsencrypt")
     reserve_parser.add_argument("--wait-seconds", type=int, default=300)
     reserve_parser.add_argument("--begin-only", action="store_true")
+    reserve_parser.add_argument("--reserve-only", action="store_true")
     https_parser = sub.add_parser("report-https")
     https_parser.add_argument("--hostname", required=True)
     https_parser.add_argument("--certificate", required=True)
@@ -846,4 +874,6 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except (OSError, RuntimeError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         print(f"central recognition error: {error}", file=sys.stderr)
+        if isinstance(error, NicknameUnavailable):
+            raise SystemExit(3)
         raise SystemExit(1)

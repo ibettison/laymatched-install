@@ -759,6 +759,50 @@ if [ "$CONFIG_ALREADY_PROVIDED" = "false" ]; then
         log_error "Invalid customer nickname. Use 3-32 lowercase letters, numbers or internal hyphens."
     CUSTOMER_HOSTNAME="${CUSTOMER_NICKNAME}.matched.laysports.co.uk"
 
+    # Bind the authorized installation and begin central reservation/DNS before
+    # collecting local account details or installing the remaining services.
+    if [ -f "$ACTIVATION_STATE_DIR/session.json" ]; then
+        log_info "Resuming the existing central activation session."
+    else
+        current_stage=$(python3 "$LOCAL_ACTIVATION_HELPER" --state-dir "$ACTIVATION_STATE_DIR" status | \
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["stage"])')
+        if [ "$current_stage" != "installed" ]; then
+            log_error "Activation is at $current_stage but its central session is missing; refusing to create another activation."
+        fi
+        run_central_activation_bootstrap
+    fi
+    advance_activation_to authorized
+    public_ipv4="${CUSTOMER_PUBLIC_IPV4:-}"
+    if [ -z "$public_ipv4" ]; then
+        public_ipv4=$(curl -4fsS --max-time 15 https://api.ipify.org) || \
+            log_error "Unable to determine the VPS public IPv4 address. Set CUSTOMER_PUBLIC_IPV4 and rerun safely."
+    fi
+    while true; do
+        if reservation_json=$(python3 /opt/laymatched/provisioning-current/recognition_client.py \
+            --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" \
+            --app-version "$APP_VERSION" reserve-hostname --reserve-only \
+            --nickname "$CUSTOMER_NICKNAME" --public-ip "$public_ipv4" \
+            --challenge-root /var/www/letsencrypt); then
+            break
+        else
+            reservation_status=$?
+            if [ "$reservation_status" -ne 3 ]; then
+                log_error "Customer hostname reservation could not be started. Retry after resolving the reported central state."
+            fi
+            log_warn "That nickname is already in use. Please choose another nickname."
+            read -r -p "Choose another LayMatched customer nickname (3-32 lowercase letters, numbers or internal hyphens): " CUSTOMER_NICKNAME_INPUT
+            CUSTOMER_NICKNAME=$(python3 "$SCRIPT_DIR/tools/customer_hostname.py" "$CUSTOMER_NICKNAME_INPUT" | sed 's/\.matched\.laysports\.co\.uk$//') || \
+                log_error "Invalid customer nickname. Use 3-32 lowercase letters, numbers or internal hyphens."
+            CUSTOMER_HOSTNAME="${CUSTOMER_NICKNAME}.matched.laysports.co.uk"
+        fi
+    done
+    CUSTOMER_HOSTNAME=$(printf '%s' "$reservation_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hostname"])')
+    CUSTOMER_NICKNAME=$(printf '%s' "$reservation_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["nickname"])')
+    advance_activation_to nickname_reserved
+    advance_activation_to dns_pending
+    printf '\n%s\n' "✓ Nickname available" "✓ Your LayMatched address is being prepared" "" "  $CUSTOMER_HOSTNAME" ""
+    log_info "We'll continue setting up your server while your address becomes ready."
+
     # Prompt for LayMatched login credentials (matches backend/scripts/create_credentials.py)
     # Collect Login ID in outer scope
     login_id=""
@@ -1065,9 +1109,8 @@ chmod +x /opt/laymatched/update.sh
 install -o root -g root -m 0644 "${SCRIPT_DIR}/tools/release_identity.sh" /opt/laymatched/release_identity.sh
 log_info "update.sh copied to /opt/laymatched/"
 
-# Start central DNS provisioning as soon as the challenge-only listener is
-# available. DNS reconciliation proceeds centrally while images and services
-# are installed; only HTTPS issuance waits for DNS readiness.
+# Complete the public-IP challenge after the challenge-only listener is live.
+# Central DNS reconciliation has already started with the early reservation.
 DNS_PROVISIONING_STARTED=false
 if [ "${CONFIG_ALREADY_PROVIDED}" = "false" ] || [ -z "${CUSTOMER_HOSTNAME:-}" ]; then
     if [ -z "${ACTIVATION_SERVICE_URL:-}" ]; then
@@ -1099,8 +1142,6 @@ if [ "${CONFIG_ALREADY_PROVIDED}" = "false" ] || [ -z "${CUSTOMER_HOSTNAME:-}" ]
         run_central_activation_bootstrap
     fi
     advance_activation_to authorized
-    advance_activation_to nickname_reserved
-    advance_activation_to dns_pending
     reservation_json=$(python3 /opt/laymatched/provisioning-current/recognition_client.py \
         --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" \
         --app-version "$APP_VERSION" reserve-hostname --begin-only \
@@ -1109,6 +1150,8 @@ if [ "${CONFIG_ALREADY_PROVIDED}" = "false" ] || [ -z "${CUSTOMER_HOSTNAME:-}" ]
         log_error "Customer hostname reservation could not be started. Retry after resolving the reported central state."
     CUSTOMER_HOSTNAME=$(printf '%s' "$reservation_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hostname"])')
     CUSTOMER_NICKNAME=$(printf '%s' "$reservation_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["nickname"])')
+    advance_activation_to nickname_reserved
+    advance_activation_to dns_pending
     if grep -q '^CUSTOMER_NICKNAME=' /opt/laymatched/.env; then
         sed -i "s|^CUSTOMER_NICKNAME=.*|CUSTOMER_NICKNAME=${CUSTOMER_NICKNAME}|" /opt/laymatched/.env
     else
