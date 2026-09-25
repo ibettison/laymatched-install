@@ -152,6 +152,13 @@ can move an activation to `suspended`, `cancelled`, or `deactivated`. Hostname
 withdrawal then moves ownership to `nickname_quarantined`; it does not make the
 nickname immediately reusable.
 
+Nickname reservation queues central DNS reconciliation in the same transaction,
+so DNS can propagate during independent installer work. Network ownership proof
+remains a separate activation gate. The installer requests a fresh,
+activation-signed short-lived network challenge only after its public-IP
+listener is ready; refreshing that challenge cannot change reservation or
+installation identity.
+
 The JSON state machine is canonical where prose and a transition differ.
 
 ## Canonical errors

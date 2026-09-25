@@ -47,10 +47,11 @@ def test_fresh_install_reserves_and_starts_dns_before_independent_setup_then_pro
     early_reservation = installer.index("reserve-hostname --reserve-only")
     account_prompt = installer.index('Enter LayMatched Login ID:')
     central_network = installer.index("reserve-hostname --begin-only")
+    refresh_challenge = installer.index("--refresh-network-challenge", central_network)
     certbot_install = installer.index("Installing Certbot for customer HTTPS")
     compose_install = installer.index("# -- Phase 7: Pull and start services")
     assert early_reservation < account_prompt
-    assert early_reservation < prepare < central_network
+    assert early_reservation < prepare < central_network < refresh_challenge
     assert early_reservation < certbot_install < compose_install
     assert "--begin-only" in installer
     assert "--reserve-only" in installer

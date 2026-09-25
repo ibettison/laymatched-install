@@ -117,6 +117,46 @@ class RecognitionClientTests(unittest.TestCase):
         self.assertEqual(error.status, 409)
         self.assertIn("fetch current activation status", str(error))
 
+    def test_http_error_preserves_central_code_and_message(self):
+        error = urllib.error.HTTPError(
+            "https://central", 422, "Unprocessable", {"X-Activation-Error": "validation_failed"},
+            io.BytesIO(b'{"detail":"Network challenge is invalid or expired"}'),
+        )
+        raised = recognition_client._recognition_http_error(error)
+        self.assertEqual(raised.code, "validation_failed")
+        self.assertEqual(raised.message, "Network challenge is invalid or expired")
+        self.assertIn("validation_failed: Network challenge is invalid or expired", str(raised))
+
+    def test_begin_only_refreshes_activation_bound_challenge_before_network_proof(self):
+        args = type("Args", (), {
+            "state_dir": self.directory, "central_url": "https://central", "nickname": "winning-way",
+            "public_ipv4": "203.0.113.10", "challenge_root": self.directory / "challenge",
+            "wait_seconds": 1, "begin_only": True, "reserve_only": False,
+            "refresh_network_challenge": True,
+        })
+        session = {"activation_id": "22222222-2222-4222-8222-222222222222", "access_token": "session", "version": 3}
+        status = {"reservation_id": "reservation-1", "nickname": "winning-way",
+                  "hostname": "winning-way.matched.laysports.co.uk", "version": 3,
+                  "dns": {"status": "ready"}, "network_challenge": None}
+        calls = []
+        def request(*_args, **kwargs):
+            calls.append(kwargs)
+            if kwargs["operation"] == "network challenge refresh":
+                return ({"reservation_id": "reservation-1", "nickname": "winning-way",
+                         "hostname": status["hostname"], "network_challenge": "freshChallenge_123456789"}, session)
+            return ({"status": "pending"}, session)
+        with patch.object(recognition_client, "_session", return_value=session), \
+             patch.object(recognition_client, "_ensure_session", return_value=session), \
+             patch.object(recognition_client, "_status", side_effect=[status, status, status, status]), \
+             patch.object(recognition_client, "_request_authenticated", side_effect=request), \
+             patch.object(recognition_client, "_write_challenge") as write_challenge:
+            self.assertEqual(recognition_client.reserve_hostname(args), 0)
+        self.assertEqual([call["operation"] for call in calls], ["network challenge refresh", "public-IP challenge verification"])
+        self.assertIn("/reservation-1/network-challenge", calls[0]["path"])
+        self.assertEqual(calls[0]["extra_headers"], {"If-Match": '"3"'})
+        self.assertEqual(calls[1]["body"]["challenge_response"], "freshChallenge_123456789")
+        write_challenge.assert_called_once_with(args.challenge_root, "network", "freshChallenge_123456789")
+
     def test_reserve_only_persists_a_matching_reservation_without_waiting_for_network_challenge(self):
         args = type("Args", (), {
             "state_dir": self.directory, "central_url": "https://central", "nickname": "winning-way",

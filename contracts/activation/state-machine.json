@@ -30,7 +30,13 @@
       "from": "nickname_reserved",
       "to": "dns_pending",
       "event": "dns_reconciliation_queued",
-      "guard": "public_address_submitted"
+      "guard": "reservation_committed_and_public_address_submitted"
+    },
+    {
+      "from": "dns_pending",
+      "to": "dns_pending",
+      "event": "network_ownership_verified",
+      "guard": "fresh_activation_bound_challenge_and_independent_public_ip_reachability"
     },
     {
       "from": "dns_pending",

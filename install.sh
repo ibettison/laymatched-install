@@ -1145,6 +1145,7 @@ if [ "${CONFIG_ALREADY_PROVIDED}" = "false" ] || [ -z "${CUSTOMER_HOSTNAME:-}" ]
     reservation_json=$(python3 /opt/laymatched/provisioning-current/recognition_client.py \
         --central-url "$ACTIVATION_SERVICE_URL" --state-dir "$ACTIVATION_STATE_DIR" \
         --app-version "$APP_VERSION" reserve-hostname --begin-only \
+        --refresh-network-challenge \
         --nickname "$CUSTOMER_NICKNAME" --public-ip "$public_ipv4" \
         --challenge-root /var/www/letsencrypt) || \
         log_error "Customer hostname reservation could not be started. Retry after resolving the reported central state."
