@@ -340,7 +340,7 @@
         },
         "responses": {
           "201": {
-            "description": "Nickname reserved and DNS reconciliation queued",
+            "description": "Nickname reserved and DNS reconciliation queued immediately; network ownership proof remains a separate required activation gate",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/NicknameReservationResponse" },
@@ -470,11 +470,40 @@
         }
       }
     },
+    "/v1/activations/{activation_id}/nickname-reservations/{reservation_id}/network-challenge": {
+      "post": {
+        "operationId": "refreshActivationNetworkChallenge",
+        "summary": "Issue a fresh network ownership challenge for the same reservation",
+        "description": "Requires the same authenticated activation session and installation signature as other activation mutations. The reservation and installation identity are fixed; refresh does not prove network ownership or permit activation by itself.",
+        "tags": ["Network"],
+        "security": [{ "ActivationToken": [], "InstallationSignature": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/ActivationId" },
+          { "$ref": "#/components/parameters/ReservationId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/SignatureTimestamp" },
+          { "$ref": "#/components/parameters/SignatureNonce" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false } } }
+        },
+        "responses": {
+          "200": { "description": "Fresh short-lived challenge bound to the existing activation reservation", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NetworkChallengeResponse" } } } },
+          "401": { "$ref": "#/components/responses/InvalidCredential" },
+          "403": { "$ref": "#/components/responses/LicenceInactive" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" }
+        }
+      }
+    },
     "/v1/activations/{activation_id}/network": {
       "put": {
         "operationId": "updateActivationNetwork",
         "summary": "Submit signed network state and reachability proof",
-        "description": "The central implementation validates public routability and proof before reconciling DNS. Slice 0 defines only the interface.",
+        "description": "Submits mandatory network ownership proof using the current short-lived activation-bound challenge. DNS reconciliation is already queued at reservation and is requeued if the proven address changes.",
         "tags": ["Network"],
         "security": [
           {
@@ -842,6 +871,7 @@
         "type": ["string", "null"],
         "enum": [
           "reserve_nickname",
+          "verify_network",
           "wait_for_dns",
           "configure_https",
           "complete_profile",
@@ -863,6 +893,7 @@
           "nickname_invalid",
           "nickname_unavailable",
           "nickname_reserved",
+          "network_pending",
           "dns_pending",
           "dns_failed",
           "https_pending",
@@ -1192,7 +1223,7 @@
       "ActivationStatus": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["activation_id", "installation_id", "status", "membership", "profile", "dns", "https", "mfa", "next_action", "updated_at", "version"],
+        "required": ["activation_id", "installation_id", "status", "membership", "profile", "dns", "https", "mfa", "next_action", "updated_at", "version", "network_verified"],
         "properties": {
           "activation_id": { "type": "string", "format": "uuid" },
           "installation_id": { "type": "string", "format": "uuid" },
@@ -1204,12 +1235,25 @@
           "reservation_id": { "type": ["string", "null"], "format": "uuid" },
           "reservation_expires_at": { "type": ["string", "null"], "format": "date-time" },
           "network_challenge": { "type": ["string", "null"], "minLength": 16, "maxLength": 128 },
+          "network_verified": { "type": "boolean", "description": "Whether independent public-IP ownership proof has succeeded." },
           "dns": { "$ref": "#/components/schemas/DnsStatus" },
           "https": { "$ref": "#/components/schemas/HttpsStatus" },
           "mfa": { "$ref": "#/components/schemas/MfaStatus" },
           "next_action": { "$ref": "#/components/schemas/NextAction" },
           "updated_at": { "type": "string", "format": "date-time" },
           "version": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "NetworkChallengeResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reservation_id", "nickname", "hostname", "network_challenge", "challenge_expires_at"],
+        "properties": {
+          "reservation_id": { "type": "string", "format": "uuid" },
+          "nickname": { "type": "string" },
+          "hostname": { "type": "string", "format": "hostname" },
+          "network_challenge": { "type": "string", "minLength": 16, "maxLength": 128 },
+          "challenge_expires_at": { "type": "string", "format": "date-time" }
         }
       },
       "ActivationCompletionRequest": {

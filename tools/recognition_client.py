@@ -39,11 +39,24 @@ class NicknameUnavailable(RuntimeError):
 
 
 class RecognitionHTTPError(RuntimeError):
-    def __init__(self, status: int, code: str | None = None):
-        detail = "; fetch current activation status before retrying" if status == VERSION_CONFLICT_STATUS else ""
+    def __init__(self, status: int, code: str | None = None, message: str | None = None):
+        detail = f" ({code}: {message})" if code and message else (f" ({code})" if code else "")
+        detail += "; fetch current activation status before retrying" if status == VERSION_CONFLICT_STATUS else ""
         super().__init__(f"central recognition request failed with HTTP {status}{detail}")
         self.status = status
         self.code = code
+        self.message = message
+
+
+def _recognition_http_error(error: urllib.error.HTTPError) -> RecognitionHTTPError:
+    try:
+        body = json.loads(error.read())
+    except (ValueError, OSError):
+        body = {}
+    code = error.headers.get("X-Activation-Error") if error.headers else None
+    message = body.get("detail") or body.get("message") if isinstance(body, dict) else None
+    return RecognitionHTTPError(error.code, code if isinstance(code, str) else None,
+                                message if isinstance(message, str) else None)
 
 
 def _is_transient_error(error: BaseException) -> bool:
@@ -82,12 +95,7 @@ def _post(url: str, body: dict, headers: dict[str, str], timeout: int = 15) -> d
         with urllib.request.urlopen(request, timeout=timeout) as response:
             value = json.loads(response.read())
     except urllib.error.HTTPError as error:
-        try:
-            body = json.loads(error.read())
-        except (ValueError, OSError):
-            body = {}
-        code = body.get("error") if isinstance(body, dict) else None
-        raise RecognitionHTTPError(error.code, code if isinstance(code, str) else None) from error
+        raise _recognition_http_error(error) from error
     if not isinstance(value, dict):
         raise RuntimeError("central recognition returned an invalid response")
     return value
@@ -99,7 +107,7 @@ def _get(url: str, headers: dict[str, str], timeout: int = 15) -> dict:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             value = json.loads(response.read())
     except urllib.error.HTTPError as error:
-        raise RecognitionHTTPError(error.code) from error
+        raise _recognition_http_error(error) from error
     if not isinstance(value, dict):
         raise RuntimeError("central activation returned an invalid response")
     return value
@@ -112,7 +120,7 @@ def _put(url: str, body: dict, headers: dict[str, str], timeout: int = 15) -> di
         with urllib.request.urlopen(request, timeout=timeout) as response:
             value = json.loads(response.read())
     except urllib.error.HTTPError as error:
-        raise RecognitionHTTPError(error.code) from error
+        raise _recognition_http_error(error) from error
     if not isinstance(value, dict):
         raise RuntimeError("central recognition returned an invalid response")
     return value
@@ -125,7 +133,7 @@ def _patch(url: str, body: dict, headers: dict[str, str], timeout: int = 15) -> 
         with urllib.request.urlopen(request, timeout=timeout) as response:
             value = json.loads(response.read())
     except urllib.error.HTTPError as error:
-        raise RecognitionHTTPError(error.code) from error
+        raise _recognition_http_error(error) from error
     if not isinstance(value, dict):
         raise RuntimeError("central recognition returned an invalid response")
     return value
@@ -529,6 +537,21 @@ def reserve_hostname(args) -> int:
         _write_hostname(directory, reservation)
         print(json.dumps(reservation, sort_keys=True))
         return 0
+    if getattr(args, "refresh_network_challenge", False):
+        if not resuming_reservation:
+            raise RuntimeError("a fresh network challenge can only be requested for the existing activation reservation")
+        current_status = _status(args, directory, session, retry_deadline=soft_deadline)
+        refresh_path = (f"/v1/activations/{session['activation_id']}/nickname-reservations/"
+                        f"{reservation['reservation_id']}/network-challenge")
+        refreshed, session = _request_authenticated(
+            args, directory, session, method="POST", path=refresh_path, body={},
+            operation="network challenge refresh", retry_deadline=soft_deadline,
+            extra_headers={"If-Match": f'"{current_status.get("version", session.get("version", 1))}"'},
+        )
+        if refreshed.get("reservation_id") != reservation.get("reservation_id") or refreshed.get("nickname") != args.nickname:
+            raise RuntimeError("central recognition refreshed a challenge for a different reservation")
+        reservation["network_challenge"] = refreshed.get("network_challenge")
+        activation_status = _status(args, directory, session, retry_deadline=soft_deadline)
     challenge = reservation.get("network_challenge")
     if not challenge and not resuming_reservation:
         raise RuntimeError("central recognition did not issue a network challenge")
@@ -838,6 +861,7 @@ def main() -> int:
     reserve_parser.add_argument("--challenge-root", default="/var/www/letsencrypt")
     reserve_parser.add_argument("--wait-seconds", type=int, default=300)
     reserve_parser.add_argument("--begin-only", action="store_true")
+    reserve_parser.add_argument("--refresh-network-challenge", action="store_true")
     reserve_parser.add_argument("--reserve-only", action="store_true")
     https_parser = sub.add_parser("report-https")
     https_parser.add_argument("--hostname", required=True)
