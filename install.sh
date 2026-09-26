@@ -722,7 +722,7 @@ if [ -n "$RELEASE_CANDIDATE_MANIFEST" ] && [ "$CONFIG_ALREADY_PROVIDED" = "true"
         "$RELEASE_CANDIDATE_MANIFEST" "/opt/laymatched/release-candidate.json" \
         /opt/laymatched/.env "$INSTALLATION_ID_FILE" "$ACTIVATION_STATE_DIR/state.json" \
         "$ACTIVATION_STATE_DIR/session.json"; then
-        log_error "Release candidate installation requires a clean customer installation or a provable same-candidate MFA-handoff resume."
+        log_error "Release candidate installation requires a clean customer installation. Existing installations may resume only when the same-candidate MFA handoff is proven."
     fi
     log_info "Verified interrupted Release Candidate installation; resuming at the MFA handoff."
 fi
